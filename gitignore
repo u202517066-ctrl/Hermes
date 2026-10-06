@@ -1,0 +1,10 @@
+# Datos y claves: nunca van a GitHub
+hermes.db
+*.xlsx
+*.xls
+!plantillas/*.xlsx
+.streamlit/secrets.toml
+estructura.txt
+todo_codigo.txt
+__pycache__/
+*_old.py
