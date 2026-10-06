@@ -116,6 +116,12 @@ def semanas_bloqueadas(feriados):
     return semanas
 
 
+def semana_con_vacaciones(vac_persona, lunes):
+    """True si la persona tiene vacaciones (en espera o aprobadas) en algún día hábil de esa semana."""
+    ini, fin = lunes.isoformat(), (lunes + timedelta(days=4)).isoformat()
+    return bool(((vac_persona["inicio"] <= fin) & (vac_persona["fin"] >= ini)).any())
+
+
 def cargar_feriados():
     df = db.consultar("SELECT fecha, nombre FROM feriados")
     return dict(zip(df["fecha"], df["nombre"].fillna("")))
@@ -371,6 +377,21 @@ with tab_cal:
             detalle = "; ".join(f"{bonito(n)} ({c} días la semana del {l:%d/%m})" for (n, l), c in dobles.items())
             st.warning(f"Solo se permite un día de teletrabajo por semana. Revisa: {detalle}. "
                        "Puedes corregirlo en «Quitar días».")
+        vac_todas = db.consultar("SELECT cod, inicio, fin FROM vacaciones_solicitudes WHERE estado <> 'RECHAZADA'")
+        cruces = [
+            (r.nombre, date.fromisoformat(r.fecha), r.id) for r in vista.itertuples()
+            if semana_con_vacaciones(vac_todas[vac_todas["cod"] == r.cod], lunes_de(date.fromisoformat(r.fecha)))
+        ]
+        if cruces:
+            detalle = "; ".join(f"{bonito(n)} ({DIAS_SEMANA[d.weekday()]} {d:%d/%m})" for n, d, _ in cruces)
+            st.warning(f"No corresponde teletrabajo en semanas con vacaciones. Revisa: {detalle}.")
+            if st.button("Quitar ese teletrabajo", key="tt_quitar_vac"):
+                with db.motor().begin() as con:
+                    con.execute(text("DELETE FROM teletrabajo_solicitudes WHERE id = :id"),
+                                [{"id": int(i)} for _, _, i in cruces])
+                st.session_state["tt_aviso"] = f"Listo: se quitó el teletrabajo de {len(cruces)} " \
+                                               f"{'semana' if len(cruces) == 1 else 'semanas'} con vacaciones."
+                st.rerun()
         aprobados = vista[vista["estado"] == "APROBADO"]
         en_espera = len(vista) - len(aprobados)
         if en_espera:
@@ -466,7 +487,7 @@ with tab_prog:
                     en_feriado.append(f)
                 elif lunes_de(f) in semanas_con:
                     ya_semana += 1
-                elif ((vac_p["inicio"] <= iso) & (vac_p["fin"] >= iso)).any():
+                elif semana_con_vacaciones(vac_p, lunes_de(f)):
                     en_vacaciones.append((cod, f))
                 else:
                     nuevos.append({"cod": cod, "fecha": iso})
@@ -495,9 +516,11 @@ with tab_prog:
             st.info(f"{ya_semana} {'semana ya tenía' if ya_semana == 1 else 'semanas ya tenían'} teletrabajo "
                     "registrado; se dejan como están (máximo un día por semana).")
         if en_vacaciones:
-            detalle = ", ".join(f"{nombres[c]} el {f:%d/%m}" for c, f in en_vacaciones[:6])
+            detalle = ", ".join(f"{nombres[c]} (semana del {lunes_de(f):%d/%m})" for c, f in en_vacaciones[:6])
             extra = f" y {len(en_vacaciones) - 6} más" if len(en_vacaciones) > 6 else ""
-            st.warning(f"Se omiten {len(en_vacaciones)} fechas porque coinciden con vacaciones: {detalle}{extra}.")
+            uno = len(en_vacaciones) == 1
+            st.info(f"Se {'omite' if uno else 'omiten'} {len(en_vacaciones)} {'semana' if uno else 'semanas'} "
+                    f"porque la persona tiene vacaciones esa semana: {detalle}{extra}.")
 
     area_de = dict(zip(personal["cod"], personal["area"]))
     if nuevos:
