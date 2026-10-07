@@ -361,6 +361,26 @@ if rol == "jefe":
 areas = ["Todas las áreas"] + sorted(personal["area"].dropna().unique().tolist())
 banda(nombre_mes, "Teletrabajo del equipo", tele_mes["cod"].nunique(), f"personas, {len(tele_mes)} días en total")
 
+# Teletrabajo que quedó en semanas con vacaciones (de este mes en adelante, todas las áreas)
+vac_todas = db.consultar("SELECT cod, inicio, fin FROM vacaciones_solicitudes WHERE estado <> 'RECHAZADA'")
+futuro = tele[tele["fecha"] >= hoy.replace(day=1).isoformat()]
+cruces = [
+    (r.nombre, date.fromisoformat(r.fecha), r.id) for r in futuro.sort_values("fecha").itertuples()
+    if semana_con_vacaciones(vac_todas[vac_todas["cod"] == r.cod], lunes_de(date.fromisoformat(r.fecha)))
+]
+if cruces:
+    detalle = "; ".join(f"{bonito(n)} ({DIAS_SEMANA[d.weekday()]} {d:%d/%m})" for n, d, _ in cruces[:8])
+    extra = f" y {len(cruces) - 8} más" if len(cruces) > 8 else ""
+    st.warning(f"**{len(cruces)} {'día' if len(cruces) == 1 else 'días'} de teletrabajo** "
+               f"{'cae' if len(cruces) == 1 else 'caen'} en semanas con "
+               f"vacaciones: {detalle}{extra}.")
+    if st.button("Quitar ese teletrabajo", key="tt_quitar_vac"):
+        with db.motor().begin() as con:
+            con.execute(text("DELETE FROM teletrabajo_solicitudes WHERE id = :id"), [{"id": int(i)} for _, _, i in cruces])
+        st.session_state["tt_aviso"] = (f"Listo: se quitó 1 día de teletrabajo que caía en vacaciones." if len(cruces) == 1
+                                        else f"Listo: se quitaron {len(cruces)} días de teletrabajo que caían en vacaciones.")
+        st.rerun()
+
 tab_cal, tab_prog, tab_quitar, tab_fer = st.tabs(["Calendario", "Programar días", "Quitar días", "Feriados"])
 
 with tab_cal:
@@ -377,21 +397,6 @@ with tab_cal:
             detalle = "; ".join(f"{bonito(n)} ({c} días la semana del {l:%d/%m})" for (n, l), c in dobles.items())
             st.warning(f"Solo se permite un día de teletrabajo por semana. Revisa: {detalle}. "
                        "Puedes corregirlo en «Quitar días».")
-        vac_todas = db.consultar("SELECT cod, inicio, fin FROM vacaciones_solicitudes WHERE estado <> 'RECHAZADA'")
-        cruces = [
-            (r.nombre, date.fromisoformat(r.fecha), r.id) for r in vista.itertuples()
-            if semana_con_vacaciones(vac_todas[vac_todas["cod"] == r.cod], lunes_de(date.fromisoformat(r.fecha)))
-        ]
-        if cruces:
-            detalle = "; ".join(f"{bonito(n)} ({DIAS_SEMANA[d.weekday()]} {d:%d/%m})" for n, d, _ in cruces)
-            st.warning(f"No corresponde teletrabajo en semanas con vacaciones. Revisa: {detalle}.")
-            if st.button("Quitar ese teletrabajo", key="tt_quitar_vac"):
-                with db.motor().begin() as con:
-                    con.execute(text("DELETE FROM teletrabajo_solicitudes WHERE id = :id"),
-                                [{"id": int(i)} for _, _, i in cruces])
-                st.session_state["tt_aviso"] = f"Listo: se quitó el teletrabajo de {len(cruces)} " \
-                                               f"{'semana' if len(cruces) == 1 else 'semanas'} con vacaciones."
-                st.rerun()
         aprobados = vista[vista["estado"] == "APROBADO"]
         en_espera = len(vista) - len(aprobados)
         if en_espera:

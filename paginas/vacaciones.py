@@ -38,6 +38,24 @@ def max_simultaneos(df, ini, fin):
     return mayor
 
 
+def quitar_teletrabajo_en_vacaciones(cod, ini, fin):
+    """Borra el teletrabajo (en espera o aprobado) de las semanas en que la persona sale de vacaciones.
+    Cuenta la semana si las vacaciones tocan algún día de lunes a viernes. Devuelve las fechas quitadas."""
+    fechas, lun = [], ini - timedelta(days=ini.weekday())
+    while lun <= fin:
+        if ini <= lun + timedelta(days=4) and fin >= lun:
+            tele = db.consultar(
+                "SELECT id, fecha FROM teletrabajo_solicitudes WHERE cod = :c AND fecha >= :a AND fecha <= :b "
+                "AND estado <> 'RECHAZADO'",
+                {"c": cod, "a": lun.isoformat(), "b": (lun + timedelta(days=6)).isoformat()},
+            )
+            for i, f in zip(tele["id"], tele["fecha"]):
+                db.ejecutar("DELETE FROM teletrabajo_solicitudes WHERE id = :id", {"id": int(i)})
+                fechas.append(date.fromisoformat(f))
+        lun += timedelta(days=7)
+    return sorted(fechas)
+
+
 def meses_entre(ini, fin):
     """Primer y último día de cada mes que toca el rango."""
     meses, d = [], ini.replace(day=1)
@@ -259,8 +277,16 @@ if st.button("Solicitar vacaciones", type="primary", disabled=bool(errores)):
                 "rg": int(gerencia), "creado": db.ahora(),
             },
         )
+        quitadas = quitar_teletrabajo_en_vacaciones(str(p["cod"]), ini, fin)
         st.session_state["vac_ok"] = gerencia
+        if quitadas:
+            st.session_state["vac_tele"] = quitadas
         st.rerun()
+
+if "vac_tele" in st.session_state:
+    quitadas = st.session_state.pop("vac_tele")
+    st.info("Se quitó el teletrabajo de las semanas de estas vacaciones: "
+            + ", ".join(f"{d:%d/%m}" for d in quitadas) + ".")
 
 if "vac_ok" in st.session_state:
     if st.session_state.pop("vac_ok"):
