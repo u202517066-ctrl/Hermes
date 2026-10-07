@@ -10,7 +10,7 @@ from openpyxl.utils import get_column_letter
 from sqlalchemy import text
 
 import db
-from lector_facturas import clave_api, leer_archivo
+from lector_facturas import VERSION, clave_api, leer_archivo
 
 st.markdown(
     """
@@ -110,8 +110,9 @@ def cargar_items(ids=None):
 
 
 @st.cache_data(show_spinner=False, max_entries=300)
-def leer(nombre, contenido):
-    """Se guarda en memoria para no volver a leer (ni pagar la IA) cada vez que se edita una celda."""
+def leer(nombre, contenido, version):
+    """Se guarda en memoria para no releer cada vez que se edita una celda.
+    'version' hace que, al actualizar el lector, las facturas se vuelvan a leer."""
     return leer_archivo(nombre, contenido)
 
 
@@ -407,7 +408,7 @@ with tab_cargar:
     revisadas = []
     for k, a in enumerate(archivos or []):
         with st.spinner(f"Leyendo {a.name}..."):
-            datos, nota = leer(a.name, a.getvalue())
+            datos, nota = leer(a.name, a.getvalue(), VERSION)
         with st.container(border=True):
             st.markdown(f"**{a.name}**  \n:gray[{nota}]")
             c1, c2, c3 = st.columns([3, 2, 2])
