@@ -7,38 +7,10 @@ import streamlit as st
 
 import db
 
-# ---------- Reglas (se pueden ajustar aquí) ----------
-DIAS_BLOQUE = 15                 # 30 días = 2 bloques de 15
-TRAMOS_BLOQUE2 = (7, 8)          # el bloque 2 se toma en tramos corridos de 7 u 8 (el resto, aunque sea 1 día, también vale)
-MESES_NORMALES = 10              # plazo normal desde el ingreso
-MESES_CICLO = 12                 # los 2 últimos meses requieren aprobación de gerencia
-TOPE_POR_GRUPO = 1               # retail: máx. de personas por grupo de vacaciones a la vez
-TOPE_EJEC_SERVICIOS = 2          # retail: máx. de ejecutivos de servicios a la vez (1 o 2)
-
-
-def sumar_meses(d, n):
-    y = d.year + (d.month - 1 + n) // 12
-    m = (d.month - 1 + n) % 12 + 1
-    return date(y, m, min(d.day, calendar.monthrange(y, m)[1]))
-
-
-def aniversario(ingreso, anio):
-    return date(anio, ingreso.month, min(ingreso.day, calendar.monthrange(anio, ingreso.month)[1]))
-
-
-def primer_aniversario(ingreso):
-    return sumar_meses(ingreso, 12)
-
-
-def inicio_ciclo(ingreso, ref):
-    """Aniversario más reciente (en o antes de ref): ese día se renuevan las vacaciones.
-    Devuelve None si a esa fecha la persona todavía no cumple 1 año."""
-    if ref < primer_aniversario(ingreso):
-        return None
-    a = aniversario(ingreso, ref.year)
-    if a > ref:
-        a = aniversario(ingreso, ref.year - 1)
-    return a
+from reglas_vacaciones import (  # las reglas viven en reglas_vacaciones.py
+    DIAS_BLOQUE, DIAS_PERIODO, MESES_NORMALES, MESES_CICLO, TOPE_POR_GRUPO, TOPE_EJEC_SERVICIOS,
+    sumar_meses, aniversario, primer_aniversario, inicio_ciclo, usados_en_ciclo, es_retail,
+)
 
 
 def cargar_personal():
@@ -47,7 +19,7 @@ def cargar_personal():
 
 def solicitudes(solo_activas=False):
     df = db.consultar(
-        """SELECT s.*, p.nombre, p.puesto, p.departamento, p.seccion
+        """SELECT s.*, p.nombre, p.puesto, p.departamento, p.area, p.seccion
            FROM vacaciones_solicitudes s JOIN rrhh_personal p ON p.cod = s.cod
            ORDER BY s.inicio DESC"""
     )
@@ -66,32 +38,18 @@ def max_simultaneos(df, ini, fin):
     return mayor
 
 
-def usados_en_ciclo(df, cod, c_ini, c_fin):
-    mios = df[(df["cod"] == cod) & (df["inicio"] >= c_ini.isoformat()) & (df["inicio"] < c_fin.isoformat())]
-    return {b: int(mios[mios["bloque"] == b]["dias"].sum()) for b in (1, 2)}
+def meses_entre(ini, fin):
+    """Primer y último día de cada mes que toca el rango."""
+    meses, d = [], ini.replace(day=1)
+    while d <= fin:
+        ultimo = d.replace(day=calendar.monthrange(d.year, d.month)[1])
+        meses.append((d, ultimo))
+        d = ultimo + timedelta(days=1)
+    return meses
 
 
-def asignar_bloque(dias, usados):
-    """Elige el bloque sin que la persona tenga que pensarlo.
-    Los tramos de 7 u 8 días (o lo que reste del bloque 2) van al bloque 2;
-    lo demás, al bloque 1, que se puede fraccionar libremente."""
-    r1, r2 = DIAS_BLOQUE - usados[1], DIAS_BLOQUE - usados[2]
-    if 0 < dias <= r2 and (dias in TRAMOS_BLOQUE2 or dias == r2):
-        return 2
-    if dias <= r1:
-        return 1
-    return None
-
-
-def opciones_validas(usados):
-    r1, r2 = DIAS_BLOQUE - usados[1], DIAS_BLOQUE - usados[2]
-    partes = []
-    if r1 > 0:
-        partes.append(f"hasta {r1} días seguidos")
-    tramo = 8 if r2 >= 8 else r2
-    if tramo > r1:
-        partes.append("un tramo de 7 u 8 días" if r2 >= 8 else f"un tramo de {r2} días")
-    return " o ".join(partes)
+MESES_ES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio",
+            "agosto", "septiembre", "octubre", "noviembre", "diciembre"]
 
 
 def validar(p, ingreso, ini, fin, es_admin):
@@ -120,31 +78,34 @@ def validar(p, ingreso, ini, fin, es_admin):
 
     activas = solicitudes(solo_activas=True)
     usados = usados_en_ciclo(activas, p["cod"], c_ini, tope)
-    libres = 2 * DIAS_BLOQUE - usados[1] - usados[2]
-    bloque = asignar_bloque(dias, usados)
+    libres = DIAS_PERIODO - usados[1] - usados[2]
+    bloque = 1  # los 30 días se reparten libremente; el bloque se guarda solo por compatibilidad
     if dias > libres:
         errores.append(f"Te quedan {libres} días por programar y estás pidiendo {dias}.")
-    elif bloque is None:
-        errores.append(f"Con los días que te quedan, puedes pedir {opciones_validas(usados)} por solicitud. "
-                       f"Estás pidiendo {dias}; prueba dividirlos en dos solicitudes.")
 
     propias = activas[activas["cod"] == p["cod"]]
     if max_simultaneos(propias, ini, fin) > 0:
         errores.append("Ya tienes vacaciones registradas que se cruzan con esas fechas.")
 
-    if "RETAIL" in str(p["departamento"]).upper():
-        otros = activas[activas["cod"] != p["cod"]]
-        if str(p["seccion"]).startswith("GRUPO"):
+    if es_retail(p):
+        otros = activas[(activas["cod"] != p["cod"]) & activas.apply(es_retail, axis=1)] if not activas.empty \
+            else activas
+        # Grupos: máximo 1 persona del grupo de vacaciones a la vez
+        if str(p["seccion"]).upper().startswith("GRUPO"):
             grupo = otros[otros["seccion"] == p["seccion"]]
             if max_simultaneos(grupo, ini, fin) >= TOPE_POR_GRUPO:
                 errores.append("Alguien de tu grupo ya tiene vacaciones en esas fechas. Prueba con otras.")
-        if p["puesto"] == "EJECUTIVO DE SERVICIOS":
-            ejec = otros[
-                otros["departamento"].str.upper().str.contains("RETAIL", na=False)
-                & (otros["puesto"] == "EJECUTIVO DE SERVICIOS")
-            ]
-            if max_simultaneos(ejec, ini, fin) >= TOPE_EJEC_SERVICIOS:
-                errores.append("Ya hay demasiados ejecutivos de servicios de vacaciones en esas fechas. Prueba con otras.")
+        # Ejecutivos de servicios: máximo 2 en el mismo mes, en fechas que no se crucen
+        if str(p["puesto"]).upper() == "EJECUTIVO DE SERVICIOS":
+            ejec = otros[otros["puesto"].str.upper() == "EJECUTIVO DE SERVICIOS"]
+            if max_simultaneos(ejec, ini, fin) > 0:
+                errores.append("Otro ejecutivo de servicios ya tiene vacaciones en esas fechas. "
+                               "Deben salir en fechas distintas.")
+            for m_ini, m_fin in meses_entre(ini, fin):
+                en_mes = ejec[(ejec["inicio"] <= m_fin.isoformat()) & (ejec["fin"] >= m_ini.isoformat())]
+                if en_mes["cod"].nunique() >= TOPE_EJEC_SERVICIOS:
+                    errores.append(f"En {MESES_ES[m_ini.month - 1]} ya salen {TOPE_EJEC_SERVICIOS} ejecutivos de "
+                                   "servicios de vacaciones (es el máximo por mes). Prueba con otro mes.")
     return errores, gerencia, bloque
 
 
@@ -230,7 +191,7 @@ activas = solicitudes(solo_activas=True)
 usados = usados_en_ciclo(activas, p["cod"], c_ini, tope)
 en_ciclo = activas[(activas["cod"] == p["cod"]) & (activas["inicio"] >= c_ini.isoformat()) & (activas["inicio"] < tope.isoformat())]
 tomados = int(en_ciclo[en_ciclo["estado"] == "APROBADA"]["dias"].sum())
-total = 2 * DIAS_BLOQUE
+total = DIAS_PERIODO
 libres = max(total - usados[1] - usados[2], 0)
 pendientes = max(total - libres - tomados, 0)
 
