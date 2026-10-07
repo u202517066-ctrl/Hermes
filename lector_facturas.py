@@ -190,7 +190,7 @@ def _clase(frase):
         return "importe"
     if "cod" in t:
         return "codigo"
-    if t.strip(". ") in ("um", "u.m", "und", "unid", "unidad", "medida", "u. medida", "unidad de medida"):
+    if t.strip(". ") in ("um", "u.m", "und", "unid") or "unidad" in t or "medida" in t:
         return "um"
     if t.strip(". ") in ("item", "n", "no", "nro", "n°", "#", "n.°"):
         return "item"
@@ -252,8 +252,13 @@ def _encabezado(lineas):
 
 
 def _columna_numero(columnas, w):
-    centro = (w[0] + w[2]) / 2
-    return min(columnas, key=lambda c: abs(c["centro"] - centro))
+    """Los montos se alinean a la derecha de su celda: la columna es la última cuyo encabezado
+    empieza antes del borde derecho del número."""
+    elegida = columnas[0]
+    for c in columnas:
+        if c["x0"] - 2 <= w[2]:
+            elegida = c
+    return elegida
 
 
 def _columna_texto(columnas, w):
@@ -262,6 +267,35 @@ def _columna_texto(columnas, w):
         if w[0] >= c["x0"] - 6:
             elegida = c
     return elegida
+
+
+MONTO = re.compile(r"-?[\d.,]*\d[.,]\d{2}")
+NUMERICAS = ("cantidad", "unitario", "precio", "importe", None)
+
+
+def _fin_descripcion(columnas, tabla):
+    """Hasta dónde llega la Descripción: donde empiezan los datos de la columna siguiente
+    (no donde empieza su título, porque los textos largos suelen pasar por debajo del título)."""
+    clases = [c["clase"] for c in columnas]
+    if "descripcion" not in clases:
+        return None, None
+    k = clases.index("descripcion")
+    desc = columnas[k]
+    if k == len(columnas) - 1:
+        return desc, float("inf")
+    sig = columnas[k + 1]
+    palabras = [w for linea in tabla for w in linea["w"]]
+    if sig["clase"] in NUMERICAS:
+        montos = [w for w in palabras if MONTO.fullmatch(w[4]) and _columna_numero(columnas, w) is sig]
+        if montos:
+            bordes = sorted(w[2] for w in montos)
+            mediana = bordes[len(bordes) // 2]
+            return desc, min(w[0] for w in montos if abs(w[2] - mediana) <= 15)
+    else:
+        valores = sorted(w[0] for w in palabras if _columna_texto(columnas, w) is sig)
+        if valores:
+            return desc, valores[len(valores) // 2]
+    return desc, sig["x0"] - 6
 
 
 def leer_items_pdf(contenido):
@@ -274,30 +308,35 @@ def leer_items_pdf(contenido):
             if not hallado:
                 continue
             fin, columnas = hallado
-            hay_ancla = any(c["clase"] in ("codigo", "cantidad", "item") for c in columnas)
-            y_anterior = lineas[fin]["y"]
+
+            def columna(w, desc=None, desc_fin=None):
+                if desc is not None and w[0] >= desc["x0"] - 6 and w[2] <= desc_fin + 1:
+                    return desc  # dentro de la Descripción, aunque sea un número ("MAYOR A 80 KG")
+                es_numero = bool(NUMERO.fullmatch(w[4]))
+                return _columna_numero(columnas, w) if es_numero else _columna_texto(columnas, w)
+
+            # 1) Filas de la tabla: desde el encabezado hasta los totales
+            tabla, y_anterior = [], lineas[fin]["y"]
             for linea in lineas[fin + 1:]:
                 if linea["y"] - y_anterior > 60:
                     break
+                clases = {columna(w)["clase"] for w in linea["w"]}
+                if any(k in _sin_tildes(linea["texto"]) for k in FIN_TABLA) and not ({"codigo", "item"} & clases):
+                    break
+                tabla.append(linea)
+                y_anterior = linea["y"]
+
+            # 2) Celdas de cada fila, con el límite real de la Descripción
+            desc, desc_fin = _fin_descripcion(columnas, tabla)
+            hay_ancla = any(c["clase"] in ("codigo", "cantidad", "item") for c in columnas)
+            for linea in tabla:
                 celdas = {}
                 for w in linea["w"]:
-                    es_numero = bool(NUMERO.fullmatch(w[4]))
-                    col = _columna_numero(columnas, w) if es_numero else _columna_texto(columnas, w)
-                    if col["clase"] == "descripcion" or not es_numero:
-                        clase = col["clase"] if not es_numero or col["clase"] != "descripcion" else "descripcion"
-                    else:
-                        clase = col["clase"]
-                    celdas.setdefault(clase or "otro", []).append(w[4])
-                texto = _sin_tildes(linea["texto"])
-                tiene_ancla = any(celdas.get(k) for k in ("codigo", "cantidad", "item"))
-                # Los totales ("Op. Gravada", "IGV", "Importe total", "SON:") marcan el fin de la tabla.
-                if any(k in texto for k in FIN_TABLA) and not (celdas.get("codigo") or celdas.get("item")):
-                    break
-                y_anterior = linea["y"]
+                    celdas.setdefault(columna(w, desc, desc_fin)["clase"] or "otro", []).append(w[4])
                 descripcion = " ".join(celdas.get("descripcion", []))
                 importe = _numero(" ".join(celdas.get("importe", [])) or None)
-                nueva = tiene_ancla if hay_ancla else importe is not None
-                if nueva:
+                tiene_ancla = any(celdas.get(k) for k in ("codigo", "cantidad", "item"))
+                if tiene_ancla if hay_ancla else importe is not None:
                     unitario = _numero(" ".join(celdas.get("unitario", [])) or None)
                     if unitario is None:
                         unitario = _numero(" ".join(celdas.get("precio", [])) or None)
