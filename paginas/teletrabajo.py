@@ -429,13 +429,20 @@ with tab_prog:
     c1, c2 = st.columns(2)
     desde = c1.date_input("Desde", value=max(hoy, mes_ini), format="DD/MM/YYYY", key="tt_desde")
     hasta = c2.date_input("Hasta", value=desde + timedelta(days=27), format="DD/MM/YYYY", key="tt_hasta")
-    c3, c4 = st.columns(2)
     habiles = DIAS_SEMANA[:5]
-    dia_a = habiles.index(c3.selectbox("Una semana", habiles, index=1, key="tt_dia_a"))
-    dia_b = habiles.index(c4.selectbox("La semana siguiente", habiles, index=3, key="tt_dia_b"))
+    modalidad = st.radio("Modalidad", ["Intercalar dos días", "Mismo día todas las semanas"],
+                         horizontal=True, key="tt_modalidad")
+    if modalidad == "Intercalar dos días":
+        c3, c4 = st.columns(2)
+        dia_a = habiles.index(c3.selectbox("Una semana", habiles, index=1, key="tt_dia_a"))
+        dia_b = habiles.index(c4.selectbox("La semana siguiente", habiles, index=3, key="tt_dia_b"))
+    else:
+        dia_a = dia_b = habiles.index(st.selectbox("Día", habiles, index=2, key="tt_dia_fijo"))
     un_dia = desde == hasta
     if un_dia:
         st.caption("Misma fecha en Desde y Hasta: se registra solo ese día (si esa semana no tiene otro).")
+    elif dia_a == dia_b:
+        st.caption(f"Un solo día de teletrabajo por semana: todos los {DIAS_LARGOS_ES[dia_a]}.")
     else:
         st.caption(f"Un solo día de teletrabajo por semana, intercalado: una semana {DIAS_LARGOS_ES[dia_a]}, "
                    f"la siguiente {DIAS_LARGOS_ES[dia_b]}. Si la persona ya tenía teletrabajo antes, "
@@ -472,7 +479,7 @@ with tab_prog:
 
     cods = [etiquetas[e] for e in elegidos]
     nuevos, en_feriado, ya_semana, en_vacaciones, vista_previa = [], [], 0, [], []
-    if hasta >= desde and dia_a != dia_b and cods:
+    if hasta >= desde and (dia_a != dia_b or modalidad != "Intercalar dos días") and cods:
         vac = db.consultar(
             "SELECT cod, inicio, fin FROM vacaciones_solicitudes WHERE estado <> 'RECHAZADA'"
         )
@@ -500,8 +507,9 @@ with tab_prog:
 
     if hasta < desde:
         st.error("La fecha «Hasta» es anterior a «Desde».")
-    elif dia_a == dia_b and not un_dia:
-        st.error("Elige dos días distintos: el teletrabajo se intercala entre una semana y la siguiente.")
+    elif dia_a == dia_b and not un_dia and modalidad == "Intercalar dos días":
+        st.error("Para intercalar, elige dos días distintos. Si siempre es el mismo día, "
+                 "usa «Mismo día todas las semanas».")
     elif cods:
         st.markdown(
             f"Vas a registrar **{len(nuevos)} {'día' if len(nuevos) == 1 else 'días'}** de teletrabajo "
