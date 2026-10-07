@@ -3,12 +3,18 @@ import calendar
 from datetime import date
 
 # ---------- Reglas (se pueden ajustar aquí) ----------
-DIAS_BLOQUE = 15                 # 30 días = 2 bloques de 15
-TRAMOS_BLOQUE2 = (7, 8)          # el bloque 2 se toma en tramos corridos de 7 u 8 (el resto, aunque sea 1 día, también vale)
+DIAS_BLOQUE = 15                 # se conserva por compatibilidad: 2 x 15 = 30 días por periodo
+DIAS_PERIODO = 2 * DIAS_BLOQUE   # 30 días por año, que se pueden repartir libremente
 MESES_NORMALES = 10              # plazo normal desde el ingreso
 MESES_CICLO = 12                 # los 2 últimos meses requieren aprobación de gerencia
-TOPE_POR_GRUPO = 1               # retail: máx. de personas por grupo de vacaciones a la vez
-TOPE_EJEC_SERVICIOS = 2          # retail: máx. de ejecutivos de servicios a la vez (1 o 2)
+TOPE_POR_GRUPO = 1               # retail: máx. de personas de un mismo grupo de vacaciones a la vez (sin cruzarse)
+TOPE_EJEC_SERVICIOS = 2          # retail: máx. de ejecutivos de servicios que salen en un mismo mes,
+                                 #         siempre en fechas que no se crucen entre ellos
+
+
+def es_retail(fila):
+    """Retail se reconoce en el área o el departamento ("COMERCIAL SECTOR RETAIL Y SERVICIOS")."""
+    return "RETAIL" in f"{fila.get('area', '')} {fila.get('departamento', '')}".upper()
 
 
 def sumar_meses(d, n):
