@@ -34,15 +34,28 @@ st.markdown(
 
 DIAS_ALERTA = 7  # avisar las que vencen en los próximos 7 días
 SIMBOLO = {"PEN": "S/", "USD": "US$"}
-ESTADOS = {"PENDIENTE": "Por pagar", "PAGADA": "Pagada", "ANULADA": "Anulada"}
+# Flujo: Por aprobar -> Aprobada (u Observada) -> Pagada
+ESTADOS = {"PENDIENTE": "Por aprobar", "APROBADA": "Aprobada", "OBSERVADA": "Observada",
+           "PAGADA": "Pagada", "ANULADA": "Anulada"}
+NO_PAGADAS = ("PENDIENTE", "APROBADA", "OBSERVADA")
 
 st.title("Facturas")
 sesion = st.session_state.get("sesion", {})
-if sesion.get("rol") != "admin":
-    st.error("Solo el administrador puede ver esta página.")
+rol = sesion.get("rol")
+if rol not in ("admin", "aprobador_facturas"):
+    st.error("Solo el administrador y el aprobador de facturas pueden ver esta página.")
     st.stop()
 
 hoy = db.hoy()
+st.session_state.setdefault("fa_ronda", 0)  # cambia tras cada acción para limpiar las casillas marcadas
+
+
+def listo(mensaje):
+    st.session_state["fa_aviso"] = mensaje
+    st.session_state["fa_ronda"] += 1
+    st.rerun()
+
+
 if "fa_aviso" in st.session_state:
     st.success(st.session_state.pop("fa_aviso"))
 
@@ -58,8 +71,13 @@ def totales_por_moneda(df):
     return " y ".join(dinero(v, m) for m, v in df.groupby("moneda")["total"].sum().items())
 
 
+def a_fecha(iso):
+    """Convierte 'AAAA-MM-DD' a fecha; vacío o sin dato -> None."""
+    return date.fromisoformat(iso) if isinstance(iso, str) and iso else None
+
+
 def fecha_corta(iso):
-    return date.fromisoformat(iso).strftime("%d/%m/%Y") if iso else ""
+    return date.fromisoformat(iso).strftime("%d/%m/%Y") if isinstance(iso, str) and iso else ""
 
 
 def cargar():
@@ -67,8 +85,12 @@ def cargar():
     for c in ("subtotal", "igv", "total"):
         df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0.0)
     df["moneda"] = df["moneda"].fillna("PEN")
-    vencida = (df["estado"] == "PENDIENTE") & (df["fecha_vencimiento"].fillna("9999") < hoy.isoformat())
-    df["situacion"] = df["estado"].map(ESTADOS).where(~vencida, "Vencida")
+    for c in ("aprobado_por", "fecha_aprobacion", "motivo_observacion"):
+        if c not in df.columns:
+            df[c] = None
+    df["vencida"] = df["estado"].isin(NO_PAGADAS) & (df["fecha_vencimiento"].fillna("9999") < hoy.isoformat())
+    df["situacion"] = df["estado"].map(ESTADOS).fillna(df["estado"])
+    df.loc[df["vencida"], "situacion"] = df.loc[df["vencida"], "situacion"] + " (vencida)"
     return df
 
 
@@ -147,8 +169,9 @@ def excel(df):
     ws.title = "Facturas"
     azul, borde = "0B4F9C", Side(style="thin", color="D5E2F3")
     columnas = ["Proveedor", "RUC", "Comprobante", "Fecha emisión", "Fecha vencimiento", "Moneda",
-                "Subtotal", "IGV", "Total", "Estado", "Fecha de pago", "Observación"]
-    anchos = [34, 14, 16, 14, 17, 9, 14, 12, 14, 12, 14, 30]
+                "Subtotal", "IGV", "Total", "Estado", "Aprobado por", "Fecha aprobación", "Fecha de pago",
+                "Observación"]
+    anchos = [34, 14, 16, 14, 17, 9, 14, 12, 14, 20, 24, 16, 14, 34]
 
     ws["A1"] = "FACTURAS DE PROVEEDORES"
     ws["A1"].font = Font(bold=True, size=14, color=azul)
@@ -165,15 +188,17 @@ def excel(df):
     for r in df.itertuples():
         valores = [
             r.proveedor, r.ruc, r.comprobante,
-            date.fromisoformat(r.fecha_emision) if r.fecha_emision else None,
-            date.fromisoformat(r.fecha_vencimiento) if r.fecha_vencimiento else None,
+            a_fecha(r.fecha_emision),
+            a_fecha(r.fecha_vencimiento),
             r.moneda, float(r.subtotal), float(r.igv), float(r.total), r.situacion,
-            date.fromisoformat(r.fecha_pago) if r.fecha_pago else None, r.observacion,
+            r.aprobado_por, a_fecha(r.fecha_aprobacion),
+            a_fecha(r.fecha_pago),
+            "; ".join(x for x in (r.observacion, f"Observada: {r.motivo_observacion}" if r.motivo_observacion else None) if x),
         ]
         for col, v in enumerate(valores, start=1):
             c = ws.cell(row=fila, column=col, value=v)
             c.border = Border(bottom=borde)
-            if col in (4, 5, 11):
+            if col in (4, 5, 12, 13):
                 c.number_format = "dd/mm/yyyy"
             elif col in (7, 8, 9):
                 c.number_format = "#,##0.00"
@@ -187,7 +212,7 @@ def excel(df):
             c = ws.cell(row=fila, column=9, value=f'=SUMIF(F5:F{ultima},"{moneda}",I5:I{ultima})')
             c.font, c.number_format = Font(bold=True), "#,##0.00"
             fila += 1
-        ws.auto_filter.ref = f"A4:L{ultima}"
+        ws.auto_filter.ref = f"A4:N{ultima}"
     ws.freeze_panes = "A5"
     ws.page_setup.orientation = "landscape"
     ws.page_setup.fitToWidth, ws.page_setup.fitToHeight = 1, 0
@@ -209,7 +234,7 @@ def excel(df):
     for it in items.itertuples():
         f = cab.loc[it.factura_id]
         valores = [f["proveedor"], f["ruc"], f["comprobante"],
-                   date.fromisoformat(f["fecha_emision"]) if f["fecha_emision"] else None, f["moneda"],
+                   a_fecha(f["fecha_emision"]), f["moneda"],
                    it.n, it.descripcion,
                    None if pd.isna(it.cantidad) else float(it.cantidad),
                    None if pd.isna(it.valor_unitario) else float(it.valor_unitario),
@@ -234,15 +259,23 @@ def excel(df):
 
 # ---------- Resumen y alertas ----------
 facturas = cargar()
-por_pagar = facturas[facturas["estado"] == "PENDIENTE"]
-vencidas = facturas[facturas["situacion"] == "Vencida"]
+por_aprobar = facturas[facturas["estado"] == "PENDIENTE"]
+aprobadas = facturas[facturas["estado"] == "APROBADA"]
+observadas = facturas[facturas["estado"] == "OBSERVADA"]
+no_pagadas = facturas[facturas["estado"].isin(NO_PAGADAS)]
+vencidas = facturas[facturas["vencida"]]
 limite = (hoy + timedelta(days=DIAS_ALERTA)).isoformat()
-proximas = por_pagar[(por_pagar["fecha_vencimiento"] >= hoy.isoformat()) & (por_pagar["fecha_vencimiento"] <= limite)]
+proximas = no_pagadas[(no_pagadas["fecha_vencimiento"] >= hoy.isoformat()) & (no_pagadas["fecha_vencimiento"] <= limite)]
 
+if rol == "aprobador_facturas":
+    subtitulo, base, etiqueta = (f"{len(por_aprobar)} por aprobar", por_aprobar, "por aprobar")
+else:
+    subtitulo = f"{len(por_aprobar)} por aprobar, {len(aprobadas)} aprobadas por pagar"
+    base, etiqueta = no_pagadas, "pendiente de pago"
 st.markdown(
     f"""<div class="fa-banda">
-  <div><h2>Facturas de proveedores</h2><p>{len(por_pagar)} por pagar</p></div>
-  <div class="fa-num"><b>{html.escape(totales_por_moneda(por_pagar))}</b><span>pendiente de pago</span></div>
+  <div><h2>Facturas de proveedores</h2><p>{html.escape(subtitulo)}</p></div>
+  <div class="fa-num"><b>{html.escape(totales_por_moneda(base))}</b><span>{etiqueta}</span></div>
 </div>""",
     unsafe_allow_html=True,
 )
@@ -256,11 +289,92 @@ def detalle(df, verbo):
 
 
 if not vencidas.empty:
-    st.error(f"**{len(vencidas)} {'factura vencida' if len(vencidas) == 1 else 'facturas vencidas'}** "
+    st.error(f"**{len(vencidas)} {'factura vencida' if len(vencidas) == 1 else 'facturas vencidas'}** sin pagar "
              f"por {totales_por_moneda(vencidas)}: {detalle(vencidas, 'venció')}.")
 if not proximas.empty:
     st.warning(f"**{len(proximas)} {'vence' if len(proximas) == 1 else 'vencen'} en los próximos {DIAS_ALERTA} días** "
                f"por {totales_por_moneda(proximas)}: {detalle(proximas, 'vence')}.")
+
+
+def nombre_actual():
+    u = db.uno("SELECT nombre, apellido FROM usuarios WHERE usuario = :u", {"u": sesion.get("usuario")})
+    nombre = f"{u.nombre or ''} {u.apellido or ''}".strip() if u else ""
+    return nombre or sesion.get("usuario")
+
+
+# ---------- Vista del aprobador ----------
+if rol == "aprobador_facturas":
+    st.subheader("Facturas por aprobar")
+    if por_aprobar.empty:
+        st.info("No hay facturas por aprobar.")
+    else:
+        pend = por_aprobar.sort_values("fecha_vencimiento")
+        tabla = pd.DataFrame({
+            "Elegir": False,
+            "Proveedor": pend["proveedor"],
+            "Comprobante": pend["comprobante"],
+            "Emisión": pend["fecha_emision"].map(fecha_corta),
+            "Vence": pend["fecha_vencimiento"].map(fecha_corta),
+            "Total": [dinero(t, m) for t, m in zip(pend["total"], pend["moneda"])],
+            "Alerta": ["Vencida" if v else "" for v in pend["vencida"]],
+            "id": pend["id"],
+        })
+        editado = st.data_editor(
+            tabla, key=f"fa_aprobar_{st.session_state['fa_ronda']}", hide_index=True, width="stretch",
+            column_order=["Elegir", "Proveedor", "Comprobante", "Emisión", "Vence", "Total", "Alerta"],
+            disabled=["Proveedor", "Comprobante", "Emisión", "Vence", "Total", "Alerta"],
+            column_config={"Elegir": st.column_config.CheckboxColumn("Elegir", width="small")},
+        )
+        ids = [int(i) for i in editado[editado["Elegir"]]["id"] if int(i) in set(pend["id"])]
+        n = f"{len(ids)} {'factura' if len(ids) == 1 else 'facturas'}"
+
+        if ids:
+            st.markdown("**Detalle de servicios de lo que marcaste**")
+            items = cargar_items(ids)
+            for fid in ids:
+                f = pend[pend["id"] == fid].iloc[0]
+                det = items[items["factura_id"] == fid]
+                st.caption(f"{f['proveedor']} · {f['comprobante']} · {dinero(f['total'], f['moneda'])}")
+                if det.empty:
+                    st.caption("Sin detalle de servicios registrado.")
+                else:
+                    st.dataframe(tabla_items(det.to_dict("records")), hide_index=True, width="stretch",
+                                 column_config=COLS_ITEMS)
+
+        motivo = st.text_input("Motivo de la observación (solo si vas a observar)", key="fa_motivo")
+        b1, b2, _ = st.columns([2, 2, 4])
+        if b1.button(f"Aprobar ({n})", type="primary", disabled=not ids):
+            with db.motor().begin() as con:
+                con.execute(text("UPDATE facturas_proveedores SET estado = 'APROBADA', aprobado_por = :q, "
+                                 "fecha_aprobacion = :f, motivo_observacion = NULL WHERE id = :id AND estado = 'PENDIENTE'"),
+                            [{"q": nombre_actual(), "f": hoy.isoformat(), "id": i} for i in ids])
+            listo(f"{n} aprobada(s).")
+        if b2.button(f"Observar ({n})", disabled=not ids):
+            if not motivo.strip():
+                st.error("Escribe el motivo de la observación para que el administrador pueda corregirla.")
+            else:
+                with db.motor().begin() as con:
+                    con.execute(text("UPDATE facturas_proveedores SET estado = 'OBSERVADA', aprobado_por = :q, "
+                                     "fecha_aprobacion = :f, motivo_observacion = :m WHERE id = :id AND estado = 'PENDIENTE'"),
+                                [{"q": nombre_actual(), "f": hoy.isoformat(), "m": motivo.strip(), "id": i} for i in ids])
+                listo(f"{n} observada(s). El administrador verá el motivo.")
+
+    with st.expander("Historial de aprobaciones"):
+        hist = facturas[facturas["estado"].isin(["APROBADA", "OBSERVADA", "PAGADA"]) & facturas["aprobado_por"].notna()]
+        hist = hist.sort_values("fecha_aprobacion", ascending=False)
+        st.dataframe(pd.DataFrame({
+            "Proveedor": hist["proveedor"], "Comprobante": hist["comprobante"],
+            "Total": [dinero(t, m) for t, m in zip(hist["total"], hist["moneda"])],
+            "Estado": hist["situacion"], "Revisó": hist["aprobado_por"],
+            "Fecha": hist["fecha_aprobacion"].map(fecha_corta), "Motivo": hist["motivo_observacion"].fillna(""),
+        }), hide_index=True, width="stretch")
+    st.stop()
+
+# ---------- Vista del administrador ----------
+if not observadas.empty:
+    st.warning(f"**{len(observadas)} {'factura observada' if len(observadas) == 1 else 'facturas observadas'}** "
+               "por el aprobador. Corrígelas y reenvíalas a aprobación: " + "; ".join(
+                   f"{r.proveedor} ({r.comprobante}): {r.motivo_observacion}" for r in observadas.head(5).itertuples()))
 
 tab_reg, tab_cargar, tab_mano = st.tabs(["Registro", "Cargar facturas", "Agregar a mano"])
 
@@ -270,17 +384,18 @@ with tab_reg:
         st.info("Todavía no hay facturas. Cárgalas en la pestaña «Cargar facturas».")
     else:
         f1, f2, f3 = st.columns(3)
-        situacion = f1.selectbox("Estado", ["Todas", "Por pagar", "Vencida", "Pagada", "Anulada"])
+        situacion = f1.selectbox("Estado", ["Todas", "Por aprobar", "Aprobada", "Observada", "Pagada",
+                                            "Anulada", "Vencidas"])
         meses = sorted({f[:7] for f in facturas["fecha_vencimiento"].dropna()}, reverse=True)
         mes = f2.selectbox("Mes de vencimiento", ["Todos"] + meses,
                            format_func=lambda m: m if m == "Todos" else f"{m[5:]}/{m[:4]}")
         buscar = f3.text_input("Buscar proveedor, RUC o comprobante")
 
         vista = facturas
-        if situacion == "Por pagar":
-            vista = vista[vista["estado"] == "PENDIENTE"]
+        if situacion == "Vencidas":
+            vista = vista[vista["vencida"]]
         elif situacion != "Todas":
-            vista = vista[vista["situacion"] == situacion]
+            vista = vista[vista["estado"].map(ESTADOS) == situacion]
         if mes != "Todos":
             vista = vista[vista["fecha_vencimiento"].fillna("").str.startswith(mes)]
         if buscar:
@@ -296,17 +411,19 @@ with tab_reg:
             "Vence": vista["fecha_vencimiento"].map(fecha_corta),
             "Total": [dinero(t, m) for t, m in zip(vista["total"], vista["moneda"])],
             "Estado": vista["situacion"],
+            "Aprobó": vista["aprobado_por"].fillna(""),
             "Pagada el": vista["fecha_pago"].map(fecha_corta),
             "id": vista["id"],
         })
         editado = st.data_editor(
-            tabla, key="fa_tabla", hide_index=True, width="stretch",
-            column_order=["Elegir", "Proveedor", "Comprobante", "Emisión", "Vence", "Total", "Estado", "Pagada el"],
-            disabled=["Proveedor", "Comprobante", "Emisión", "Vence", "Total", "Estado", "Pagada el"],
+            tabla, key=f"fa_tabla_{st.session_state['fa_ronda']}", hide_index=True, width="stretch",
+            column_order=["Elegir", "Proveedor", "Comprobante", "Emisión", "Vence", "Total", "Estado", "Aprobó",
+                          "Pagada el"],
+            disabled=["Proveedor", "Comprobante", "Emisión", "Vence", "Total", "Estado", "Aprobó", "Pagada el"],
             column_config={"Elegir": st.column_config.CheckboxColumn("Elegir", width="small")},
         )
         st.caption(f"{len(vista)} {'factura' if len(vista) == 1 else 'facturas'}. Total: {totales_por_moneda(vista)}")
-        ids = [int(i) for i in editado[editado["Elegir"]]["id"]]
+        ids = [int(i) for i in editado[editado["Elegir"]]["id"] if int(i) in set(vista["id"])]
 
         a1, a2, a3, a4, a5 = st.columns([2, 2, 2, 2, 2])
         fecha_pago = a1.date_input("Fecha de pago", value=hoy, format="DD/MM/YYYY", label_visibility="collapsed")
@@ -314,16 +431,20 @@ with tab_reg:
         def actualizar(sql, extra, mensaje):
             with db.motor().begin() as con:
                 con.execute(text(sql), [{"id": i, **extra} for i in ids])
-            st.session_state["fa_aviso"] = mensaje
-            st.rerun()
+            listo(mensaje)
 
         n = f"{len(ids)} {'factura' if len(ids) == 1 else 'facturas'}"
+        estados_sel = set(facturas[facturas["id"].isin(ids)]["estado"])
         if a2.button("Marcar pagada", type="primary", disabled=not ids):
-            actualizar("UPDATE facturas_proveedores SET estado = 'PAGADA', fecha_pago = :f WHERE id = :id",
-                       {"f": fecha_pago.isoformat()}, f"{n} marcada(s) como pagada(s).")
-        if a3.button("Volver a por pagar", disabled=not ids):
-            actualizar("UPDATE facturas_proveedores SET estado = 'PENDIENTE', fecha_pago = NULL WHERE id = :id",
-                       {}, f"{n} de vuelta a por pagar.")
+            if estados_sel != {"APROBADA"}:
+                st.error("Solo se pueden marcar como pagadas las facturas **aprobadas**.")
+            else:
+                actualizar("UPDATE facturas_proveedores SET estado = 'PAGADA', fecha_pago = :f WHERE id = :id",
+                           {"f": fecha_pago.isoformat()}, f"{n} marcada(s) como pagada(s).")
+        if a3.button("Reenviar a aprobación", disabled=not ids):
+            actualizar("UPDATE facturas_proveedores SET estado = 'PENDIENTE', fecha_pago = NULL, aprobado_por = NULL, "
+                       "fecha_aprobacion = NULL, motivo_observacion = NULL WHERE id = :id",
+                       {}, f"{n} enviada(s) otra vez a aprobación.")
         if a4.button("Anular", disabled=not ids):
             actualizar("UPDATE facturas_proveedores SET estado = 'ANULADA' WHERE id = :id", {}, f"{n} anulada(s).")
         if a5.button("Eliminar", disabled=not ids):
@@ -339,14 +460,16 @@ with tab_reg:
         if len(ids) == 1:
             f = facturas[facturas["id"] == ids[0]].iloc[0]
             with st.expander(f"Editar {f['comprobante']} ({f['proveedor']})", expanded=True):
+                if f["motivo_observacion"]:
+                    st.warning(f"Observación de {f['aprobado_por']}: {f['motivo_observacion']}")
                 e1, e2, e3 = st.columns([3, 2, 2])
                 n_prov = e1.text_input("Proveedor", f["proveedor"] or "", key=f"ed_p_{ids[0]}")
                 n_ruc = e2.text_input("RUC", f["ruc"] or "", key=f"ed_r_{ids[0]}")
                 n_comp = e3.text_input("Comprobante", f["comprobante"] or "", key=f"ed_c_{ids[0]}")
                 e4, e5, e6 = st.columns(3)
-                n_emi = e4.date_input("Emisión", date.fromisoformat(f["fecha_emision"]) if f["fecha_emision"] else hoy,
+                n_emi = e4.date_input("Emisión", (a_fecha(f["fecha_emision"]) or hoy),
                                       format="DD/MM/YYYY", key=f"ed_e_{ids[0]}")
-                n_ven = e5.date_input("Vence", date.fromisoformat(f["fecha_vencimiento"]) if f["fecha_vencimiento"] else hoy,
+                n_ven = e5.date_input("Vence", (a_fecha(f["fecha_vencimiento"]) or hoy),
                                       format="DD/MM/YYYY", key=f"ed_v_{ids[0]}")
                 n_mon = e6.selectbox("Moneda", ["PEN", "USD"], index=1 if f["moneda"] == "USD" else 0, key=f"ed_m_{ids[0]}")
                 e7, e8, e9 = st.columns(3)
@@ -360,16 +483,19 @@ with tab_reg:
                     elif not n_prov.strip() or not n_comp.strip() or n_tot <= 0:
                         st.error("Completa proveedor, comprobante y total.")
                     else:
+                        vuelve = f["estado"] in ("APROBADA", "OBSERVADA")
                         db.ejecutar(
                             "UPDATE facturas_proveedores SET proveedor = :p, ruc = :r, comprobante = :c, "
                             "fecha_emision = :e, fecha_vencimiento = :v, moneda = :m, subtotal = :s, igv = :i, "
-                            "total = :t, observacion = :o WHERE id = :id",
+                            "total = :t, observacion = :o" + (
+                                ", estado = 'PENDIENTE', aprobado_por = NULL, fecha_aprobacion = NULL, "
+                                "motivo_observacion = NULL" if vuelve else "") + " WHERE id = :id",
                             {"p": n_prov.strip(), "r": n_ruc.strip() or None, "c": n_comp.strip().upper(),
                              "e": n_emi.isoformat(), "v": n_ven.isoformat(), "m": n_mon, "s": n_sub, "i": n_igv,
                              "t": n_tot, "o": n_obs.strip() or None, "id": ids[0]},
                         )
-                        st.session_state["fa_aviso"] = f"Factura {n_comp.strip().upper()} actualizada."
-                        st.rerun()
+                        listo(f"Factura {n_comp.strip().upper()} actualizada." + (
+                            " Como cambió, vuelve a aprobación." if vuelve else ""))
         elif ids:
             st.caption("Para editar una factura, marca solo una.")
 
