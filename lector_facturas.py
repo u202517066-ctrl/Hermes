@@ -17,6 +17,8 @@ import xml.etree.ElementTree as ET
 import zipfile
 from datetime import datetime
 
+VERSION = "2026-10-08"  # cambia con cada mejora del lector: así la app no reutiliza lecturas viejas
+
 CAMPOS = ["ruc", "proveedor", "comprobante", "fecha_emision", "fecha_vencimiento",
           "moneda", "subtotal", "igv", "total"]
 
@@ -126,13 +128,18 @@ def parsear_texto(texto):
     ve = re.search(r"(?:Fecha\s+de\s+)?vencimiento\s*:?\s*" + RE_FECHA, texto, re.IGNORECASE)
     d["fecha_emision"] = _fecha(em.group(1)) if em else None
     d["fecha_vencimiento"] = _fecha(ve.group(1)) if ve else None
-    # Facturas a crédito (formato SUNAT): tabla "Nº Cuota / Fec. Venc. / Monto" -> la última cuota
-    cuotas = re.search(r"Fec(?:ha)?\.?\s*(?:de\s+)?Venc(?:imiento)?\.?", texto, re.IGNORECASE)
-    if cuotas and re.search(r"cuota", texto, re.IGNORECASE):
-        fechas_cuotas = [_fecha(f) for f in re.findall(RE_FECHA, texto[cuotas.end():])]
-        fechas_cuotas = [f for f in fechas_cuotas if f]
-        if fechas_cuotas:
-            d["fecha_vencimiento"] = max(fechas_cuotas)
+    # Facturas a crédito (formato SUNAT): tabla "Nº Cuota / Fec. Venc. / Monto" -> fecha de la última cuota
+    etiqueta = re.search(r"Fec(?:ha)?\.?\s*(?:de\s+)?Venc(?:imiento)?\.?", texto, re.IGNORECASE)
+    hay_cuotas = re.search(r"cuota", texto, re.IGNORECASE)
+    if hay_cuotas:
+        desde = min(m.start() for m in (etiqueta, hay_cuotas) if m)
+        fechas = [f for f in (_fecha(x) for x in re.findall(RE_FECHA, texto[desde:])) if f]
+        if fechas:
+            d["fecha_vencimiento"] = max(fechas)
+    elif etiqueta and not d["fecha_vencimiento"]:
+        siguiente = re.search(RE_FECHA, texto[etiqueta.end():etiqueta.end() + 80])
+        if siguiente:
+            d["fecha_vencimiento"] = _fecha(siguiente.group(1))
     if not d["fecha_emision"]:
         fechas = [_fecha(f) for f in re.findall(RE_FECHA, texto)]
         fechas = [f for f in fechas if f]
