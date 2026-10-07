@@ -23,7 +23,8 @@ CARPETA = Path(__file__).resolve().parent
 ZONA = ZoneInfo("America/Lima")
 _engine = None
 
-TABLAS = ["usuarios", "rrhh_personal", "vacaciones_solicitudes", "teletrabajo_solicitudes", "feriados"]
+TABLAS = ["usuarios", "rrhh_personal", "vacaciones_solicitudes", "teletrabajo_solicitudes", "feriados",
+          "facturas_proveedores", "facturas_items"]
 
 # El esquema está escrito para PostgreSQL; para SQLite se adapta solo el tipo del id.
 ESQUEMA = [
@@ -43,6 +44,14 @@ ESQUEMA = [
         creado TEXT, resuelto_por TEXT)""",
     """CREATE TABLE IF NOT EXISTS feriados (
         fecha TEXT PRIMARY KEY, nombre TEXT)""",
+    """CREATE TABLE IF NOT EXISTS facturas_proveedores (
+        id SERIAL PRIMARY KEY, ruc TEXT, proveedor TEXT, comprobante TEXT,
+        fecha_emision TEXT, fecha_vencimiento TEXT, moneda TEXT,
+        subtotal NUMERIC(14,2), igv NUMERIC(14,2), total NUMERIC(14,2),
+        estado TEXT, fecha_pago TEXT, observacion TEXT, archivo TEXT, creado TEXT)""",
+    """CREATE TABLE IF NOT EXISTS facturas_items (
+        id SERIAL PRIMARY KEY, factura_id INTEGER, n INTEGER, descripcion TEXT,
+        cantidad NUMERIC(14,3), valor_unitario NUMERIC(14,4), importe NUMERIC(14,2))""",
 ]
 
 
