@@ -23,6 +23,15 @@ CARPETA = Path(__file__).resolve().parent
 ZONA = ZoneInfo("America/Lima")
 _engine = None
 
+VERSION_ESQUEMA = 2  # súbelo cuando se agreguen columnas, para que la app las cree al arrancar
+
+# Columnas agregadas después de creadas las tablas: (tabla, columna, tipo)
+COLUMNAS_NUEVAS = [
+    ("facturas_proveedores", "aprobado_por", "TEXT"),
+    ("facturas_proveedores", "fecha_aprobacion", "TEXT"),
+    ("facturas_proveedores", "motivo_observacion", "TEXT"),
+]
+
 TABLAS = ["usuarios", "rrhh_personal", "vacaciones_solicitudes", "teletrabajo_solicitudes", "feriados",
           "facturas_proveedores", "facturas_items"]
 
@@ -123,6 +132,11 @@ def crear_tablas():
             if local:
                 sql = sql.replace("SERIAL PRIMARY KEY", "INTEGER PRIMARY KEY AUTOINCREMENT")
             con.execute(text(sql))
+        from sqlalchemy import inspect
+        revisor = inspect(con)
+        for tabla, columna, tipo in COLUMNAS_NUEVAS:
+            if columna not in {c["name"] for c in revisor.get_columns(tabla)}:
+                con.execute(text(f"ALTER TABLE {tabla} ADD COLUMN {columna} {tipo}"))
         if local:
             # hermes.db antiguos: agrega columnas que pudieran faltar
             columnas = {r[1] for r in con.execute(text("PRAGMA table_info(vacaciones_solicitudes)"))}

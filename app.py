@@ -2,18 +2,20 @@ import streamlit as st
 
 import db
 import seguridad as seg
+from reglas_vacaciones import jefes_por_area
 
 st.set_page_config(page_title="HERMES", layout="wide")
 
 
 @st.cache_resource
-def iniciar_bd():
+def iniciar_bd(tablas):
+    # Se vuelve a ejecutar sola cuando db.py agrega tablas nuevas
     db.crear_tablas()
     return True
 
 
 try:
-    iniciar_bd()
+    iniciar_bd(tuple(db.TABLAS) + (db.VERSION_ESQUEMA,))
 except Exception as e:
     st.error("No se pudo conectar a la base de datos. Revisa DB_URL en los secrets.")
     st.caption(f"{type(e).__name__}: {str(e)[:300]}")
@@ -67,9 +69,22 @@ if not actual or actual["estado"] != "ACTIVO":
     st.session_state.pop("sesion", None)
     st.rerun()
 sesion.update(rol=actual["rol"], cod=actual["cod"])
+# Los jefes de área (reglas_vacaciones.APROBADORES) entran como jefes aunque en Perfiles figuren como colaborador
+if sesion["rol"] == "colaborador" and sesion["cod"]:
+    if sesion["cod"] in jefes_por_area(db.consultar("SELECT cod, nombre, area FROM rrhh_personal")).values():
+        sesion["rol"] = "jefe"
 
 rol = sesion["rol"]
 es_jefatura = rol in ("jefe", "admin")
+
+if rol == "aprobador_facturas":  # solo ve las facturas por aprobar
+    st.sidebar.title("HERMES")
+    st.sidebar.caption(f"{sesion['usuario']} · aprobador de facturas")
+    if st.sidebar.button("Cerrar sesión"):
+        st.session_state.pop("sesion", None)
+        st.rerun()
+    st.navigation({"FINANZAS": [st.Page("paginas/facturas.py", title="Facturas", default=True)]}).run()
+    st.stop()
 
 menu = {
     "PRINCIPAL": [st.Page("paginas/dashboard.py", title="Dashboard", default=True)],
