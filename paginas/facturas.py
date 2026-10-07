@@ -354,13 +354,12 @@ with tab_reg:
 
 # ---------- Cargar facturas (lectura automática) ----------
 with tab_cargar:
-    con_ia = clave_api() is not None
-    if con_ia:
-        st.markdown("Sube una o varias facturas en **PDF**, **foto** (JPG o PNG) o **XML**. La inteligencia artificial "
-                    "lee cualquier formato de proveedor, incluido el detalle de servicios. Revisa antes de guardar.")
-    else:
-        st.info("La lectura con inteligencia artificial no está activada (falta la clave ANTHROPIC_API_KEY en los "
-                "secrets). Mientras tanto, el XML se lee completo y el PDF se intenta leer por reglas.")
+    st.markdown("Sube una o varias facturas en **PDF** o **XML** (también el ZIP que manda el proveedor). "
+                "El sistema busca la tabla de cada factura, sea cual sea el formato del proveedor, y saca los montos "
+                "y el detalle de servicios. **Revisa antes de guardar**: con el XML la lectura es exacta; con el PDF "
+                "puede haber algo que corregir.")
+    if clave_api():
+        st.caption("Lectura con IA activada para PDF y fotos.")
     if "fa_subida" not in st.session_state:
         st.session_state["fa_subida"] = 0
     ronda = st.session_state["fa_subida"]
