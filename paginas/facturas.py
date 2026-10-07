@@ -25,6 +25,8 @@ st.markdown(
 .fa-num { text-align: right; line-height: 1.1; }
 .fa-num b { font-size: 2.4rem; display: block; }
 .fa-num span { opacity: 0.85; font-size: 0.95rem; }
+/* Sin botones − / +: los montos leídos de la factura solo se corrigen escribiendo */
+[data-testid="stNumberInputStepUp"], [data-testid="stNumberInputStepDown"] { display: none; }
 </style>
 """,
     unsafe_allow_html=True,
