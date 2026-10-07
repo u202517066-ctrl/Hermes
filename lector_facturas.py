@@ -140,19 +140,175 @@ def parsear_texto(texto):
 
     d["total"] = _numero(_ultimo(r"(?:importe\s+total|total\s+a\s+pagar|total\s+venta|\btotal\b)"
                                  r"[^\d]{0,30}" + RE_MONTO, texto))
-    d["igv"] = _numero(_ultimo(r"\bI\.?G\.?V\.?\b[^\d\n]{0,25}(?:18\s*%[^\d\n]{0,15})?" + RE_MONTO, texto))
+    d["igv"] = _numero(_ultimo(r"\bI\.?G\.?V\.?(?:\s*\(?\s*18\s*%\s*\)?)?[^\d]{0,25}" + RE_MONTO, texto))
     d["subtotal"] = _numero(_ultimo(r"(?:op\.?\s*gravadas?|operaci[oó]n\s+gravada|sub\s*-?\s*total|valor\s+de\s+venta)"
                                     r"[^\d]{0,30}" + RE_MONTO, texto))
     if d["subtotal"] is None and d["total"] is not None and d["igv"] is not None:
         d["subtotal"] = round(d["total"] - d["igv"], 2)
+    if d["igv"] is None and d["total"] is not None and d["subtotal"] is not None:
+        d["igv"] = round(d["total"] - d["subtotal"], 2)
     return d
 
 
 def leer_pdf(contenido):
-    from pypdf import PdfReader
-    lector = PdfReader(io.BytesIO(contenido))
-    texto = "\n".join((p.extract_text() or "") for p in lector.pages[:3])
-    return texto
+    try:
+        import pymupdf
+        with pymupdf.open(stream=contenido, filetype="pdf") as doc:
+            return "\n".join(doc[i].get_text("text") for i in range(min(3, len(doc))))
+    except ImportError:
+        from pypdf import PdfReader
+        lector = PdfReader(io.BytesIO(contenido))
+        return "\n".join((p.extract_text() or "") for p in lector.pages[:3])
+
+
+# ---------- Detalle de servicios desde el PDF (sin IA) ----------
+# En vez de columnas fijas por proveedor, se busca la fila de encabezados de la tabla
+# (Código, Cantidad, Descripción, P. Unit., Importe...) y se arman las columnas
+# según dónde está cada encabezado en esa factura.
+import unicodedata
+
+NUMERO = re.compile(r"-?\(?[\d.,]*\d[\d.,]*\)?")
+FIN_TABLA = ("gravad", "sub total", "subtotal", "i.g.v", "igv", "importe total", "total a pagar",
+             "son:", "son ", "valor de venta", "total venta", "observacion", "op. exonerad", "op. inafect")
+
+
+def _sin_tildes(t):
+    return "".join(c for c in unicodedata.normalize("NFD", t.lower()) if unicodedata.category(c) != "Mn")
+
+
+def _clase(frase):
+    t = _sin_tildes(frase)
+    if any(k in t for k in ("descrip", "detalle", "concepto", "producto", "servicio")):
+        return "descripcion"
+    if "cant" in t:
+        return "cantidad"
+    if "unit" in t or t.replace(" ", "") in ("p.u.", "pu", "p/u", "v.u.", "vu"):
+        return "unitario"
+    if "precio" in t:
+        return "precio"
+    if any(k in t for k in ("importe", "total", "valor", "monto", "sub-total")):
+        return "importe"
+    if "cod" in t:
+        return "codigo"
+    if t.strip(". ") in ("um", "u.m", "und", "unid", "unidad", "medida", "u. medida", "unidad de medida"):
+        return "um"
+    if t.strip(". ") in ("item", "n", "no", "nro", "n°", "#", "n.°"):
+        return "item"
+    return None
+
+
+def _lineas(palabras, tolerancia=3):
+    filas = []
+    for w in sorted(palabras, key=lambda w: ((w[1] + w[3]) / 2, w[0])):
+        y = (w[1] + w[3]) / 2
+        for f in filas:
+            if abs(f["y"] - y) <= tolerancia:
+                f["w"].append(w)
+                break
+        else:
+            filas.append({"y": y, "w": [w]})
+    for f in filas:
+        f["w"].sort(key=lambda w: w[0])
+        f["texto"] = " ".join(w[4] for w in f["w"])
+    return filas
+
+
+def _frases(palabras, separacion=6):
+    """Agrupa las palabras de una línea en frases (una por columna) según la distancia entre ellas."""
+    frases = []
+    for w in sorted(palabras, key=lambda w: w[0]):
+        if frases and w[0] - frases[-1]["x1"] <= separacion:
+            frases[-1]["texto"] += " " + w[4]
+            frases[-1]["x1"] = w[2]
+        else:
+            frases.append({"texto": w[4], "x0": w[0], "x1": w[2]})
+    return frases
+
+
+def _encabezado(lineas):
+    """Devuelve (índice de la última línea del encabezado, columnas) o None."""
+    for i, linea in enumerate(lineas):
+        frases = _frases(linea["w"])
+        clases = [_clase(f["texto"]) for f in frases]
+        if "descripcion" not in clases or not ({"cantidad", "unitario", "precio", "importe"} & set(clases)):
+            continue
+        fin = i
+        # encabezados partidos en dos líneas ("Valor Venta / Unitario")
+        if i + 1 < len(lineas) and lineas[i + 1]["y"] - linea["y"] <= 14 \
+                and not any(NUMERO.fullmatch(w[4]) for w in lineas[i + 1]["w"]):
+            for w in lineas[i + 1]["w"]:
+                centro = (w[0] + w[2]) / 2
+                destino = next((f for f in frases if f["x0"] - 6 <= centro <= f["x1"] + 6), None)
+                if destino:
+                    destino["texto"] += " " + w[4]
+                    destino["x1"] = max(destino["x1"], w[2])
+                else:
+                    frases.append({"texto": w[4], "x0": w[0], "x1": w[2]})
+            fin = i + 1
+        columnas = sorted(({**f, "clase": _clase(f["texto"]), "centro": (f["x0"] + f["x1"]) / 2} for f in frases),
+                          key=lambda c: c["x0"])
+        return fin, columnas
+    return None
+
+
+def _columna_numero(columnas, w):
+    centro = (w[0] + w[2]) / 2
+    return min(columnas, key=lambda c: abs(c["centro"] - centro))
+
+
+def _columna_texto(columnas, w):
+    elegida = columnas[0]
+    for c in columnas:
+        if w[0] >= c["x0"] - 6:
+            elegida = c
+    return elegida
+
+
+def leer_items_pdf(contenido):
+    import pymupdf
+    items = []
+    with pymupdf.open(stream=contenido, filetype="pdf") as doc:
+        for pagina in doc:
+            lineas = _lineas(pagina.get_text("words"))
+            hallado = _encabezado(lineas)
+            if not hallado:
+                continue
+            fin, columnas = hallado
+            hay_ancla = any(c["clase"] in ("codigo", "cantidad", "item") for c in columnas)
+            y_anterior = lineas[fin]["y"]
+            for linea in lineas[fin + 1:]:
+                if linea["y"] - y_anterior > 60:
+                    break
+                celdas = {}
+                for w in linea["w"]:
+                    es_numero = bool(NUMERO.fullmatch(w[4]))
+                    col = _columna_numero(columnas, w) if es_numero else _columna_texto(columnas, w)
+                    if col["clase"] == "descripcion" or not es_numero:
+                        clase = col["clase"] if not es_numero or col["clase"] != "descripcion" else "descripcion"
+                    else:
+                        clase = col["clase"]
+                    celdas.setdefault(clase or "otro", []).append(w[4])
+                texto = _sin_tildes(linea["texto"])
+                tiene_ancla = any(celdas.get(k) for k in ("codigo", "cantidad", "item"))
+                # Los totales ("Op. Gravada", "IGV", "Importe total", "SON:") marcan el fin de la tabla.
+                if any(k in texto for k in FIN_TABLA) and not (celdas.get("codigo") or celdas.get("item")):
+                    break
+                y_anterior = linea["y"]
+                descripcion = " ".join(celdas.get("descripcion", []))
+                importe = _numero(" ".join(celdas.get("importe", [])) or None)
+                nueva = tiene_ancla if hay_ancla else importe is not None
+                if nueva:
+                    unitario = _numero(" ".join(celdas.get("unitario", [])) or None)
+                    if unitario is None:
+                        unitario = _numero(" ".join(celdas.get("precio", [])) or None)
+                    cantidad = _numero(" ".join(celdas.get("cantidad", [])) or None)
+                    if importe is None and cantidad and unitario:
+                        importe = round(cantidad * unitario, 2)
+                    items.append({"descripcion": descripcion or None, "cantidad": cantidad,
+                                  "valor_unitario": unitario, "importe": importe})
+                elif descripcion and items:  # descripción que continúa en la línea siguiente
+                    items[-1]["descripcion"] = ((items[-1]["descripcion"] or "") + " " + descripcion).strip()
+    return [it for it in items if it["descripcion"] and (it["importe"] or it["cantidad"] or it["valor_unitario"])]
 
 
 # ---------- Lectura con inteligencia artificial ----------
@@ -308,6 +464,10 @@ def leer_archivo(nombre, contenido, usar_ia=True):
             if len(texto.strip()) < 30:
                 return _vacio(), "PDF escaneado: no se pudo leer, complétala a mano"
             datos = parsear_texto(texto)
+            try:
+                datos["items"] = leer_items_pdf(contenido)
+            except Exception:
+                datos["items"] = []
             faltan = [c for c in ("comprobante", "ruc", "total", "fecha_emision") if not datos[c]]
             nota = "Leída del PDF: revisa los datos"
             if faltan:
