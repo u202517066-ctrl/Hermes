@@ -335,6 +335,43 @@ with tab_reg:
                     con.execute(text("DELETE FROM facturas_items WHERE factura_id = :id"), [{"id": i} for i in ids])
                 actualizar("DELETE FROM facturas_proveedores WHERE id = :id", {}, f"{n} eliminada(s).")
 
+        if len(ids) == 1:
+            f = facturas[facturas["id"] == ids[0]].iloc[0]
+            with st.expander(f"Editar {f['comprobante']} ({f['proveedor']})", expanded=True):
+                e1, e2, e3 = st.columns([3, 2, 2])
+                n_prov = e1.text_input("Proveedor", f["proveedor"] or "", key=f"ed_p_{ids[0]}")
+                n_ruc = e2.text_input("RUC", f["ruc"] or "", key=f"ed_r_{ids[0]}")
+                n_comp = e3.text_input("Comprobante", f["comprobante"] or "", key=f"ed_c_{ids[0]}")
+                e4, e5, e6 = st.columns(3)
+                n_emi = e4.date_input("Emisión", date.fromisoformat(f["fecha_emision"]) if f["fecha_emision"] else hoy,
+                                      format="DD/MM/YYYY", key=f"ed_e_{ids[0]}")
+                n_ven = e5.date_input("Vence", date.fromisoformat(f["fecha_vencimiento"]) if f["fecha_vencimiento"] else hoy,
+                                      format="DD/MM/YYYY", key=f"ed_v_{ids[0]}")
+                n_mon = e6.selectbox("Moneda", ["PEN", "USD"], index=1 if f["moneda"] == "USD" else 0, key=f"ed_m_{ids[0]}")
+                e7, e8, e9 = st.columns(3)
+                n_sub = e7.number_input("Subtotal", value=float(f["subtotal"]), min_value=0.0, format="%.2f", key=f"ed_s_{ids[0]}")
+                n_igv = e8.number_input("IGV", value=float(f["igv"]), min_value=0.0, format="%.2f", key=f"ed_i_{ids[0]}")
+                n_tot = e9.number_input("Total", value=float(f["total"]), min_value=0.0, format="%.2f", key=f"ed_t_{ids[0]}")
+                n_obs = st.text_input("Observación", f["observacion"] or "", key=f"ed_o_{ids[0]}")
+                if st.button("Guardar cambios", type="primary", key=f"ed_g_{ids[0]}"):
+                    if n_ven < n_emi:
+                        st.error("La fecha de vencimiento es anterior a la de emisión.")
+                    elif not n_prov.strip() or not n_comp.strip() or n_tot <= 0:
+                        st.error("Completa proveedor, comprobante y total.")
+                    else:
+                        db.ejecutar(
+                            "UPDATE facturas_proveedores SET proveedor = :p, ruc = :r, comprobante = :c, "
+                            "fecha_emision = :e, fecha_vencimiento = :v, moneda = :m, subtotal = :s, igv = :i, "
+                            "total = :t, observacion = :o WHERE id = :id",
+                            {"p": n_prov.strip(), "r": n_ruc.strip() or None, "c": n_comp.strip().upper(),
+                             "e": n_emi.isoformat(), "v": n_ven.isoformat(), "m": n_mon, "s": n_sub, "i": n_igv,
+                             "t": n_tot, "o": n_obs.strip() or None, "id": ids[0]},
+                        )
+                        st.session_state["fa_aviso"] = f"Factura {n_comp.strip().upper()} actualizada."
+                        st.rerun()
+        elif ids:
+            st.caption("Para editar una factura, marca solo una.")
+
         with st.expander("Ver el detalle de servicios de una factura"):
             opciones = {f"{r.proveedor} · {r.comprobante}": int(r.id) for r in vista.itertuples()}
             if opciones:
