@@ -108,12 +108,14 @@ def guardar(filas):
                 repetidas.append(f["comprobante"])
                 continue
             claves.add(clave)
-            datos = {k: v for k, v in f.items() if k != "items"}
+            datos = {k: v for k, v in f.items() if k not in ("items", "documento")}
             factura_id = con.execute(text(
                 "INSERT INTO facturas_proveedores (ruc, proveedor, comprobante, fecha_emision, fecha_vencimiento, "
                 "moneda, subtotal, igv, total, estado, observacion, archivo, creado) VALUES (:ruc, :proveedor, "
                 ":comprobante, :fecha_emision, :fecha_vencimiento, :moneda, :subtotal, :igv, :total, 'PENDIENTE', "
                 ":observacion, :archivo, :creado) RETURNING id"), {**datos, "creado": db.ahora()}).scalar()
+            if f.get("documento"):
+                guardar_documento(con, factura_id, *f["documento"])
             items = [it for it in f.get("items", []) if it.get("descripcion") or it.get("importe")]
             if items:
                 con.execute(text(
@@ -122,6 +124,80 @@ def guardar(filas):
                     [{**it, "factura_id": factura_id, "n": i} for i, it in enumerate(items, start=1)])
             guardadas += 1
     return guardadas, repetidas
+
+
+# ---------- Documento original de la factura ----------
+TIPOS = {".pdf": "application/pdf", ".xml": "application/xml", ".zip": "application/zip",
+         ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp"}
+
+
+def tipo_de(nombre):
+    return TIPOS.get("." + nombre.lower().rsplit(".", 1)[-1], "application/octet-stream")
+
+
+def guardar_documento(con, factura_id, nombre, contenido):
+    con.execute(text("DELETE FROM facturas_archivos WHERE factura_id = :f"), {"f": factura_id})
+    con.execute(text("INSERT INTO facturas_archivos (factura_id, nombre, tipo, contenido) VALUES (:f, :n, :t, :c)"),
+                {"f": factura_id, "n": nombre, "t": tipo_de(nombre), "c": contenido})
+
+
+def documento_de(factura_id):
+    fila = db.uno("SELECT nombre, contenido FROM facturas_archivos WHERE factura_id = :f", {"f": int(factura_id)})
+    return (fila.nombre, bytes(fila.contenido)) if fila else None
+
+
+@st.cache_data(show_spinner=False, max_entries=60)
+def paginas_pdf(contenido, maximo=4):
+    import pymupdf
+    imagenes = []
+    with pymupdf.open(stream=contenido, filetype="pdf") as doc:
+        for pagina in list(doc)[:maximo]:
+            imagenes.append(pagina.get_pixmap(dpi=110).tobytes("png"))
+        total = len(doc)
+    return imagenes, total
+
+
+def mostrar_documento(nombre, contenido, clave):
+    """Muestra el documento original en pantalla, con un botón para descargarlo."""
+    import io as _io
+    import zipfile
+    ext = nombre.lower().rsplit(".", 1)[-1]
+    st.download_button("Descargar documento", data=contenido, file_name=nombre, mime=tipo_de(nombre),
+                       key=f"desc_{clave}")
+    try:
+        if ext == "zip":
+            with zipfile.ZipFile(_io.BytesIO(contenido)) as z:
+                internos = [n for n in z.namelist() if n.lower().endswith((".pdf", ".xml"))]
+                pdfs = [n for n in internos if n.lower().endswith(".pdf")]
+                elegido = pdfs[0] if pdfs else (internos[0] if internos else None)
+                if not elegido:
+                    st.caption("El ZIP no trae PDF ni XML para mostrar.")
+                    return
+                st.caption(f"Mostrando {elegido}, dentro del ZIP.")
+                nombre, contenido, ext = elegido, z.read(elegido), elegido.lower().rsplit(".", 1)[-1]
+        if ext == "pdf":
+            imagenes, total = paginas_pdf(contenido)
+            for img in imagenes:
+                st.image(img)
+            if total > len(imagenes):
+                st.caption(f"Se muestran {len(imagenes)} de {total} páginas. Descarga el documento para verlo completo.")
+        elif ext in ("png", "jpg", "jpeg", "webp"):
+            st.image(contenido)
+        elif ext == "xml":
+            st.code(contenido.decode("utf-8", errors="replace")[:30000], language="xml")
+        else:
+            st.caption("Este tipo de archivo no se puede mostrar; descárgalo para verlo.")
+    except Exception:
+        st.caption("No se pudo mostrar el documento; descárgalo para verlo.")
+
+
+def ver_documento_guardado(factura_id, clave):
+    doc = documento_de(factura_id)
+    if doc:
+        mostrar_documento(doc[0], doc[1], clave)
+    else:
+        st.caption("Esta factura no tiene documento guardado (se registró antes de esta mejora o a mano). "
+                   "Puedes adjuntarlo al editarla.")
 
 
 def cargar_items(ids=None):
@@ -340,6 +416,8 @@ if rol == "aprobador_facturas":
                 else:
                     st.dataframe(tabla_items(det.to_dict("records")), hide_index=True, width="stretch",
                                  column_config=COLS_ITEMS)
+                with st.expander(f"Ver documento de {f['comprobante']}"):
+                    ver_documento_guardado(fid, f"ap_{fid}")
 
         motivo = st.text_input("Motivo de la observación (solo si vas a observar)", key="fa_motivo")
         b1, b2, _ = st.columns([2, 2, 4])
@@ -455,6 +533,7 @@ with tab_reg:
                 st.session_state.pop("fa_confirmar")
                 with db.motor().begin() as con:
                     con.execute(text("DELETE FROM facturas_items WHERE factura_id = :id"), [{"id": i} for i in ids])
+                    con.execute(text("DELETE FROM facturas_archivos WHERE factura_id = :id"), [{"id": i} for i in ids])
                 actualizar("DELETE FROM facturas_proveedores WHERE id = :id", {}, f"{n} eliminada(s).")
 
         if len(ids) == 1:
@@ -477,6 +556,9 @@ with tab_reg:
                 n_igv = e8.number_input("IGV", value=float(f["igv"]), min_value=0.0, format="%.2f", key=f"ed_i_{ids[0]}")
                 n_tot = e9.number_input("Total", value=float(f["total"]), min_value=0.0, format="%.2f", key=f"ed_t_{ids[0]}")
                 n_obs = st.text_input("Observación", f["observacion"] or "", key=f"ed_o_{ids[0]}")
+                adjunto = st.file_uploader("Adjuntar o reemplazar el documento (opcional)",
+                                           type=["pdf", "xml", "zip", "png", "jpg", "jpeg", "webp"],
+                                           key=f"ed_doc_{ids[0]}")
                 if st.button("Guardar cambios", type="primary", key=f"ed_g_{ids[0]}"):
                     if n_ven < n_emi:
                         st.error("La fecha de vencimiento es anterior a la de emisión.")
@@ -484,6 +566,9 @@ with tab_reg:
                         st.error("Completa proveedor, comprobante y total.")
                     else:
                         vuelve = f["estado"] in ("APROBADA", "OBSERVADA")
+                        if adjunto is not None:
+                            with db.motor().begin() as con:
+                                guardar_documento(con, ids[0], adjunto.name, adjunto.getvalue())
                         db.ejecutar(
                             "UPDATE facturas_proveedores SET proveedor = :p, ruc = :r, comprobante = :c, "
                             "fecha_emision = :e, fecha_vencimiento = :v, moneda = :m, subtotal = :s, igv = :i, "
@@ -498,6 +583,10 @@ with tab_reg:
                             " Como cambió, vuelve a aprobación." if vuelve else ""))
         elif ids:
             st.caption("Para editar una factura, marca solo una.")
+
+        if len(ids) == 1:
+            with st.expander(f"Ver documento de {f['comprobante']}"):
+                ver_documento_guardado(ids[0], f"reg_{ids[0]}")
 
         with st.expander("Ver el detalle de servicios de una factura"):
             opciones = {f"{r.proveedor} · {r.comprobante}": int(r.id) for r in vista.itertuples()}
@@ -537,6 +626,8 @@ with tab_cargar:
             datos, nota = leer(a.name, a.getvalue(), VERSION)
         with st.container(border=True):
             st.markdown(f"**{a.name}**  \n:gray[{nota}]")
+            with st.expander("Ver documento"):
+                mostrar_documento(a.name, a.getvalue(), f"carga_{ronda}_{k}")
             c1, c2, c3 = st.columns([3, 2, 2])
             proveedor = c1.text_input("Proveedor", datos["proveedor"] or "", key=f"fa_p_{ronda}_{k}")
             ruc = c2.text_input("RUC", datos["ruc"] or "", key=f"fa_r_{ronda}_{k}")
@@ -571,7 +662,7 @@ with tab_cargar:
                 "fecha_emision": emision.isoformat() if emision else None,
                 "fecha_vencimiento": (vence or emision).isoformat() if (vence or emision) else None,
                 "moneda": moneda, "subtotal": subtotal, "igv": igv, "total": total,
-                "observacion": None, "archivo": a.name, "items": items,
+                "observacion": None, "archivo": a.name, "items": items, "documento": (a.name, a.getvalue()),
             }})
 
     if revisadas:
@@ -606,6 +697,8 @@ with tab_mano:
         total = c9.number_input("Total", min_value=0.0, step=10.0, format="%.2f",
                                 help="Si lo dejas en 0, se calcula como subtotal + IGV")
         observacion = st.text_input("Observación (opcional)")
+        doc_mano = st.file_uploader("Documento de la factura (opcional)",
+                                    type=["pdf", "xml", "zip", "png", "jpg", "jpeg", "webp"], key="fa_doc_mano")
         st.markdown("Detalle de servicios (opcional)")
         items_m = st.data_editor(tabla_items([]), key="fa_items_mano", num_rows="dynamic", hide_index=True,
                                  width="stretch", column_config=COLS_ITEMS)
@@ -622,6 +715,7 @@ with tab_mano:
                     "fecha_vencimiento": vence.isoformat(), "moneda": moneda, "subtotal": subtotal or None,
                     "igv": igv or None, "total": total, "observacion": observacion.strip() or None, "archivo": None,
                     "items": limpiar_items(items_m),
+                    "documento": (doc_mano.name, doc_mano.getvalue()) if doc_mano is not None else None,
                 }])
                 if repetidas:
                     st.error("Esa factura ya está registrada (mismo RUC y comprobante).")
