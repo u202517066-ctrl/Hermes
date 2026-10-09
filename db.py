@@ -23,7 +23,7 @@ CARPETA = Path(__file__).resolve().parent
 ZONA = ZoneInfo("America/Lima")
 _engine = None
 
-VERSION_ESQUEMA = 2  # súbelo cuando se agreguen columnas, para que la app las cree al arrancar
+VERSION_ESQUEMA = 3  # súbelo cuando se agreguen columnas, para que la app las cree al arrancar
 
 # Columnas agregadas después de creadas las tablas: (tabla, columna, tipo)
 COLUMNAS_NUEVAS = [
@@ -33,7 +33,7 @@ COLUMNAS_NUEVAS = [
 ]
 
 TABLAS = ["usuarios", "rrhh_personal", "vacaciones_solicitudes", "teletrabajo_solicitudes", "feriados",
-          "facturas_proveedores", "facturas_items"]
+          "facturas_proveedores", "facturas_items", "facturas_archivos"]
 
 # El esquema está escrito para PostgreSQL; para SQLite se adapta solo el tipo del id.
 ESQUEMA = [
@@ -58,6 +58,8 @@ ESQUEMA = [
         fecha_emision TEXT, fecha_vencimiento TEXT, moneda TEXT,
         subtotal NUMERIC(14,2), igv NUMERIC(14,2), total NUMERIC(14,2),
         estado TEXT, fecha_pago TEXT, observacion TEXT, archivo TEXT, creado TEXT)""",
+    """CREATE TABLE IF NOT EXISTS facturas_archivos (
+        id SERIAL PRIMARY KEY, factura_id INTEGER, nombre TEXT, tipo TEXT, contenido BYTEA)""",
     """CREATE TABLE IF NOT EXISTS facturas_items (
         id SERIAL PRIMARY KEY, factura_id INTEGER, n INTEGER, descripcion TEXT,
         cantidad NUMERIC(14,3), valor_unitario NUMERIC(14,4), importe NUMERIC(14,2))""",
@@ -130,7 +132,7 @@ def crear_tablas():
     with motor().begin() as con:
         for sql in ESQUEMA:
             if local:
-                sql = sql.replace("SERIAL PRIMARY KEY", "INTEGER PRIMARY KEY AUTOINCREMENT")
+                sql = sql.replace("SERIAL PRIMARY KEY", "INTEGER PRIMARY KEY AUTOINCREMENT").replace("BYTEA", "BLOB")
             con.execute(text(sql))
         from sqlalchemy import inspect
         revisor = inspect(con)
