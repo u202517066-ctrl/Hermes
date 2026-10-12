@@ -368,96 +368,20 @@ def nombre_actual():
     return nombre or sesion.get("usuario")
 
 
-# ---------- Vista del aprobador ----------
-if rol == "aprobador_facturas":
-    st.subheader("Facturas por aprobar")
-    if por_aprobar.empty:
-        st.info("No hay facturas por aprobar.")
-    else:
-        pend = por_aprobar.sort_values("fecha_vencimiento")
-        tabla = pd.DataFrame({
-            "Elegir": False,
-            "Proveedor": pend["proveedor"],
-            "Comprobante": pend["comprobante"],
-            "Emisión": pend["fecha_emision"].map(fecha_corta),
-            "Vence": pend["fecha_vencimiento"].map(fecha_corta),
-            "Total": [dinero(t, m) for t, m in zip(pend["total"], pend["moneda"])],
-            "Alerta": pend["alerta"],
-            "id": pend["id"],
-        })
-        editado = st.data_editor(
-            tabla, key=f"fa_aprobar_{st.session_state['fa_ronda']}", hide_index=True, width="stretch",
-            column_order=["Elegir", "Proveedor", "Comprobante", "Emisión", "Vence", "Total", "Alerta"],
-            disabled=["Proveedor", "Comprobante", "Emisión", "Vence", "Total", "Alerta"],
-            column_config={"Elegir": st.column_config.CheckboxColumn("Elegir", width="small")},
-        )
-        ids = [int(i) for i in editado[editado["Elegir"]]["id"] if int(i) in set(pend["id"])]
-        n = f"{len(ids)} {'factura' if len(ids) == 1 else 'facturas'}"
-
-        if ids:
-            st.markdown("**Detalle de servicios de lo que marcaste**")
-            items = cargar_items(ids)
-            for fid in ids:
-                f = pend[pend["id"] == fid].iloc[0]
-                det = items[items["factura_id"] == fid]
-                st.caption(f"{f['proveedor']} · {f['comprobante']} · {dinero(f['total'], f['moneda'])}")
-                if det.empty:
-                    st.caption("Sin detalle de servicios registrado.")
-                else:
-                    st.dataframe(tabla_items(det.to_dict("records")), hide_index=True, width="stretch",
-                                 column_config=COLS_ITEMS)
-                with st.expander(f"Ver documento de {f['comprobante']}"):
-                    ver_documento_guardado(fid, f"ap_{fid}")
-
-        motivo = st.text_input("Motivo de la observación (solo si vas a observar)", key="fa_motivo")
-        b1, b2, _ = st.columns([2, 2, 4])
-        if b1.button(f"Aprobar ({n})", type="primary", disabled=not ids):
-            with db.motor().begin() as con:
-                con.execute(text("UPDATE facturas_proveedores SET estado = 'APROBADA', aprobado_por = :q, "
-                                 "fecha_aprobacion = :f, motivo_observacion = NULL WHERE id = :id AND estado = 'PENDIENTE'"),
-                            [{"q": nombre_actual(), "f": hoy.isoformat(), "id": i} for i in ids])
-            listo(f"{n} aprobada(s).")
-        if b2.button(f"Observar ({n})", disabled=not ids):
-            if not motivo.strip():
-                st.error("Escribe el motivo de la observación para que el administrador pueda corregirla.")
-            else:
-                with db.motor().begin() as con:
-                    con.execute(text("UPDATE facturas_proveedores SET estado = 'OBSERVADA', aprobado_por = :q, "
-                                     "fecha_aprobacion = :f, motivo_observacion = :m WHERE id = :id AND estado = 'PENDIENTE'"),
-                                [{"q": nombre_actual(), "f": hoy.isoformat(), "m": motivo.strip(), "id": i} for i in ids])
-                listo(f"{n} observada(s). El administrador verá el motivo.")
-
-    with st.expander("Historial de aprobaciones"):
-        hist = facturas[facturas["estado"].isin(["APROBADA", "OBSERVADA", "PAGADA"]) & facturas["aprobado_por"].notna()]
-        hist = hist.sort_values("fecha_aprobacion", ascending=False)
-        st.dataframe(pd.DataFrame({
-            "Proveedor": hist["proveedor"], "Comprobante": hist["comprobante"],
-            "Total": [dinero(t, m) for t, m in zip(hist["total"], hist["moneda"])],
-            "Estado": hist["situacion"], "Revisó": hist["aprobado_por"],
-            "Fecha": hist["fecha_aprobacion"].map(fecha_corta), "Motivo": hist["motivo_observacion"].fillna(""),
-        }), hide_index=True, width="stretch")
-    st.stop()
-
-# ---------- Vista del administrador ----------
-if not observadas.empty:
-    st.warning(f"Tienes **{len(observadas)} {'factura observada' if len(observadas) == 1 else 'facturas observadas'}** "
-               "por el aprobador. El motivo está en la columna «Observación» del Registro.")
-
-tab_dash, tab_reg, tab_cargar, tab_mano = st.tabs(["Dashboard", "Registro", "Cargar facturas", "Agregar a mano"])
-
-# ---------- Dashboard ----------
-with tab_dash:
+# ---------- Dashboard (compartido) ----------
+def dashboard(prefijo, con_excel=False):
+    """Dashboard con filtros por proveedor y estado. Lo usan el administrador y el aprobador."""
     if facturas.empty:
         st.info("Todavía no hay facturas. Cárgalas en la pestaña «Cargar facturas».")
     else:
         d1, d2, d3 = st.columns([3, 3, 1.4])
         sel_prov = d1.multiselect("Proveedor", sorted(facturas["proveedor"].dropna().unique()),
-                                  placeholder="Todos los proveedores", key="db_prov")
+                                  placeholder="Todos los proveedores", key=f"{prefijo}prov")
         sel_est = d2.multiselect("Estado", list(ESTADOS.values()),
                                  default=[ESTADOS[e] for e in NO_PAGADAS], placeholder="Todos los estados",
-                                 key="db_est")
+                                 key=f"{prefijo}est")
         monedas = sorted(facturas["moneda"].unique())
-        moneda = d3.selectbox("Moneda", monedas, key="db_mon") if len(monedas) > 1 else monedas[0]
+        moneda = d3.selectbox("Moneda", monedas, key=f"{prefijo}mon") if len(monedas) > 1 else monedas[0]
 
         v = facturas[facturas["moneda"] == moneda]
         if sel_prov:
@@ -520,6 +444,102 @@ with tab_dash:
                         else "background-color: #FEF6E4; color: #8A5A00" if "🟡" in str(x) else "" for x in col]
 
             st.dataframe(vista_d.style.apply(color_alerta, subset=["Alerta"]), hide_index=True, width="stretch")
+
+
+        if con_excel:
+            st.download_button(
+                "Descargar en Excel (lo filtrado)",
+                data=excel(v),
+                file_name=f"facturas_proveedores_{hoy:%Y-%m-%d}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key=f"{prefijo}excel",
+                disabled=v.empty,
+            )
+
+
+# ---------- Vista del aprobador ----------
+if rol == "aprobador_facturas":
+    tab_ap, tab_ap_dash = st.tabs(["Por aprobar", "Dashboard"])
+    with tab_ap_dash:
+        dashboard("ap_", con_excel=True)
+    with tab_ap:
+        if por_aprobar.empty:
+            st.info("No hay facturas por aprobar.")
+        else:
+            pend = por_aprobar.sort_values("fecha_vencimiento")
+            tabla = pd.DataFrame({
+                "Elegir": False,
+                "Proveedor": pend["proveedor"],
+                "Comprobante": pend["comprobante"],
+                "Emisión": pend["fecha_emision"].map(fecha_corta),
+                "Vence": pend["fecha_vencimiento"].map(fecha_corta),
+                "Total": [dinero(t, m) for t, m in zip(pend["total"], pend["moneda"])],
+                "Alerta": pend["alerta"],
+                "id": pend["id"],
+            })
+            editado = st.data_editor(
+                tabla, key=f"fa_aprobar_{st.session_state['fa_ronda']}", hide_index=True, width="stretch",
+                column_order=["Elegir", "Proveedor", "Comprobante", "Emisión", "Vence", "Total", "Alerta"],
+                disabled=["Proveedor", "Comprobante", "Emisión", "Vence", "Total", "Alerta"],
+                column_config={"Elegir": st.column_config.CheckboxColumn("Elegir", width="small")},
+            )
+            ids = [int(i) for i in editado[editado["Elegir"]]["id"] if int(i) in set(pend["id"])]
+            n = f"{len(ids)} {'factura' if len(ids) == 1 else 'facturas'}"
+
+            if ids:
+                st.markdown("**Detalle de servicios de lo que marcaste**")
+                items = cargar_items(ids)
+                for fid in ids:
+                    f = pend[pend["id"] == fid].iloc[0]
+                    det = items[items["factura_id"] == fid]
+                    st.caption(f"{f['proveedor']} · {f['comprobante']} · {dinero(f['total'], f['moneda'])}")
+                    if det.empty:
+                        st.caption("Sin detalle de servicios registrado.")
+                    else:
+                        st.dataframe(tabla_items(det.to_dict("records")), hide_index=True, width="stretch",
+                                     column_config=COLS_ITEMS)
+                    with st.expander(f"Ver documento de {f['comprobante']}"):
+                        ver_documento_guardado(fid, f"ap_{fid}")
+
+            motivo = st.text_input("Motivo de la observación (solo si vas a observar)", key="fa_motivo")
+            b1, b2, _ = st.columns([2, 2, 4])
+            if b1.button(f"Aprobar ({n})", type="primary", disabled=not ids):
+                with db.motor().begin() as con:
+                    con.execute(text("UPDATE facturas_proveedores SET estado = 'APROBADA', aprobado_por = :q, "
+                                     "fecha_aprobacion = :f, motivo_observacion = NULL WHERE id = :id AND estado = 'PENDIENTE'"),
+                                [{"q": nombre_actual(), "f": hoy.isoformat(), "id": i} for i in ids])
+                listo(f"{n} aprobada(s).")
+            if b2.button(f"Observar ({n})", disabled=not ids):
+                if not motivo.strip():
+                    st.error("Escribe el motivo de la observación para que el administrador pueda corregirla.")
+                else:
+                    with db.motor().begin() as con:
+                        con.execute(text("UPDATE facturas_proveedores SET estado = 'OBSERVADA', aprobado_por = :q, "
+                                         "fecha_aprobacion = :f, motivo_observacion = :m WHERE id = :id AND estado = 'PENDIENTE'"),
+                                    [{"q": nombre_actual(), "f": hoy.isoformat(), "m": motivo.strip(), "id": i} for i in ids])
+                    listo(f"{n} observada(s). El administrador verá el motivo.")
+
+        with st.expander("Historial de aprobaciones"):
+            hist = facturas[facturas["estado"].isin(["APROBADA", "OBSERVADA", "PAGADA"]) & facturas["aprobado_por"].notna()]
+            hist = hist.sort_values("fecha_aprobacion", ascending=False)
+            st.dataframe(pd.DataFrame({
+                "Proveedor": hist["proveedor"], "Comprobante": hist["comprobante"],
+                "Total": [dinero(t, m) for t, m in zip(hist["total"], hist["moneda"])],
+                "Estado": hist["situacion"], "Revisó": hist["aprobado_por"],
+                "Fecha": hist["fecha_aprobacion"].map(fecha_corta), "Motivo": hist["motivo_observacion"].fillna(""),
+            }), hide_index=True, width="stretch")
+    st.stop()
+
+# ---------- Vista del administrador ----------
+if not observadas.empty:
+    st.warning(f"Tienes **{len(observadas)} {'factura observada' if len(observadas) == 1 else 'facturas observadas'}** "
+               "por el aprobador. El motivo está en la columna «Observación» del Registro.")
+
+tab_dash, tab_reg, tab_cargar, tab_mano = st.tabs(["Dashboard", "Registro", "Cargar facturas", "Agregar a mano"])
+
+# ---------- Dashboard ----------
+with tab_dash:
+    dashboard("adm_")
 
 # ---------- Registro ----------
 with tab_reg:
