@@ -341,20 +341,6 @@ vencidas = facturas[facturas["vencida"]]
 limite = (hoy + timedelta(days=DIAS_ALERTA)).isoformat()
 proximas = no_pagadas[(no_pagadas["fecha_vencimiento"] >= hoy.isoformat()) & (no_pagadas["fecha_vencimiento"] <= limite)]
 
-if rol == "aprobador_facturas":
-    subtitulo, base, etiqueta = (f"{len(por_aprobar)} por aprobar", por_aprobar, "por aprobar")
-else:
-    subtitulo = f"{len(por_aprobar)} por aprobar, {len(aprobadas)} aprobadas por pagar"
-    base, etiqueta = no_pagadas, "pendiente de pago"
-st.markdown(
-    f"""<div class="fa-banda">
-  <div><h2>Facturas de proveedores</h2><p>{html.escape(subtitulo)}</p></div>
-  <div class="fa-num"><b>{html.escape(totales_por_moneda(base))}</b><span>{etiqueta}</span></div>
-</div>""",
-    unsafe_allow_html=True,
-)
-
-
 def detalle(df, verbo):
     partes = [f"{r.proveedor} ({r.comprobante}, {dinero(r.total, r.moneda)}, {verbo} el {fecha_corta(r.fecha_vencimiento)})"
               for r in df.head(5).itertuples()]
