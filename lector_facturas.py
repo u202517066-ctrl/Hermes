@@ -17,7 +17,7 @@ import xml.etree.ElementTree as ET
 import zipfile
 from datetime import datetime
 
-VERSION = "2026-10-08"  # cambia con cada mejora del lector: así la app no reutiliza lecturas viejas
+VERSION = "2026-10-13"  # cambia con cada mejora del lector: así la app no reutiliza lecturas viejas
 
 CAMPOS = ["ruc", "proveedor", "comprobante", "fecha_emision", "fecha_vencimiento",
           "moneda", "subtotal", "igv", "total"]
@@ -101,12 +101,36 @@ RE_COMPROBANTE = re.compile(r"\b([FE][A-Z0-9]{3})\s*[-–]\s*0*(\d{1,8})\b")
 RE_RUC = re.compile(r"\b((?:10|15|17|20)\d{9})\b")
 RE_FECHA = r"(\d{2}[/-]\d{2}[/-]\d{4}|\d{4}-\d{2}-\d{2})"
 RE_MONTO = r"(\d{1,3}(?:,\d{3})*\.\d{2}|\d+\.\d{2})"
+SOCIEDAD_EN_LINEA = re.compile(
+    r"^(.*?\b(?:S\.\s?A\.\s?C\.?|S\.\s?A\.\s?A\.?|E\.\s?I\.\s?R\.\s?L\.?|S\.\s?R\.\s?L\.?|S\.\s?A\.?|SAC|SAA|EIRL|SRL))(?=\s|$)",
+    re.IGNORECASE)
 SOCIEDADES = re.compile(r"\b(S\.?A\.?C\.?|S\.?A\.?A\.?|S\.?A\.?|E\.?I\.?R\.?L\.?|S\.?R\.?L\.?)\s*$", re.IGNORECASE)
 
 
 def _ultimo(patron, texto):
     m = re.findall(patron, texto, re.IGNORECASE)
     return m[-1] if m else None
+
+
+def _codigo_moneda(t):
+    t = _sin_tildes(t or "").upper()
+    if "US" in t or "DOLAR" in t or t.startswith("$"):
+        return "USD"
+    if t.startswith("S") or "PEN" in t or "SOL" in t:
+        return "PEN"
+    return None
+
+
+def _moneda(texto):
+    m = re.search(r"Moneda\s*:?\s*([A-Za-zÁÉÍÓÚáéíóú$/.]+(?:\s+[A-Za-zÁÉÍÓÚáéíóú]+)?)", texto, re.IGNORECASE)
+    if m and _codigo_moneda(m.group(1)):
+        return _codigo_moneda(m.group(1))
+    m = re.search(r"(?:importe\s+total|total\s+a\s+pagar)[^\d\n]{0,30}?(US\$|USD|\$|S/|PEN)", texto, re.IGNORECASE)
+    if m:
+        return _codigo_moneda(m.group(1))
+    soles = len(re.findall(r"S/|\bSOLES\b", texto, re.IGNORECASE))
+    dolares = len(re.findall(r"US\$|\bUSD\b|D[OÓ]LAR", texto, re.IGNORECASE))
+    return "USD" if dolares > soles else ("PEN" if soles else None)
 
 
 def parsear_texto(texto):
@@ -120,9 +144,15 @@ def parsear_texto(texto):
 
     lineas = [l.strip() for l in texto.splitlines() if l.strip()]
     for l in lineas[:15]:
-        if SOCIEDADES.search(l) and "RUC" not in l.upper():
-            d["proveedor"] = l
-            break
+        norm = _sin_tildes(l)
+        if re.match(r"(cliente|senor|sr\.|adquiriente|razon social del cliente|destinatario)", norm):
+            continue
+        m = SOCIEDAD_EN_LINEA.search(l)
+        if m:
+            nombre = re.sub(r"^(raz[oó]n social|emisor|proveedor)\s*:?\s*", "", m.group(1).strip(), flags=re.IGNORECASE)
+            if nombre and "RUC" not in nombre.upper():
+                d["proveedor"] = nombre
+                break
 
     em = re.search(r"Fecha\s+de\s+emisi[oó]n\s*:?\s*" + RE_FECHA, texto, re.IGNORECASE)
     ve = re.search(r"(?:Fecha\s+de\s+)?vencimiento\s*:?\s*" + RE_FECHA, texto, re.IGNORECASE)
@@ -146,21 +176,20 @@ def parsear_texto(texto):
         if fechas:
             d["fecha_emision"] = fechas[0]
 
-    arriba = texto.upper()
-    if "US$" in arriba or "DÓLAR" in arriba or "DOLAR" in arriba or "USD" in arriba:
-        d["moneda"] = "USD"
-    elif "S/" in arriba or "SOLES" in arriba or "PEN" in arriba:
-        d["moneda"] = "PEN"
+    d["moneda"] = _moneda(texto)
 
     d["total"] = _numero(_ultimo(r"(?:importe\s+total|total\s+a\s+pagar|total\s+venta|\btotal\b)"
                                  r"[^\d]{0,30}" + RE_MONTO, texto))
-    d["igv"] = _numero(_ultimo(r"\bI\.?G\.?V\.?(?:\s*\(?\s*18\s*%\s*\)?)?[^\d]{0,25}" + RE_MONTO, texto))
+    d["igv"] = _numero(_ultimo(r"\bI\.?G\.?V\.?(?:\s*\(?\s*18(?:[.,]0+)?\s*%\s*\)?\s*:?)?[^\d]{0,25}" + RE_MONTO, texto))
     d["subtotal"] = _numero(_ultimo(r"(?:op\.?\s*gravadas?|operaci[oó]n\s+gravada|sub\s*-?\s*total|valor\s+de\s+venta)"
                                     r"[^\d]{0,30}" + RE_MONTO, texto))
     if d["subtotal"] is None and d["total"] is not None and d["igv"] is not None:
         d["subtotal"] = round(d["total"] - d["igv"], 2)
-    if d["igv"] is None and d["total"] is not None and d["subtotal"] is not None:
-        d["igv"] = round(d["total"] - d["subtotal"], 2)
+    if d["total"] is not None and d["subtotal"] is not None:
+        esperado = round(d["total"] - d["subtotal"], 2)
+        tasa = round(d["subtotal"] * 0.18, 2)
+        if d["igv"] is None or (abs(d["igv"] - esperado) > 0.05 and abs(d["igv"] - tasa) > 0.05):
+            d["igv"] = esperado
     return d
 
 
@@ -168,7 +197,9 @@ def leer_pdf(contenido):
     try:
         import pymupdf
         with pymupdf.open(stream=contenido, filetype="pdf") as doc:
-            return "\n".join(doc[i].get_text("text") for i in range(min(3, len(doc))))
+            # una línea de texto por cada renglón visual, para que etiqueta y valor queden juntos
+            return "\n".join(l["texto"] for i in range(min(3, len(doc)))
+                             for l in _lineas(doc[i].get_text("words")))
     except ImportError:
         from pypdf import PdfReader
         lector = PdfReader(io.BytesIO(contenido))
@@ -239,30 +270,63 @@ def _frases(palabras, separacion=6):
     return frases
 
 
+def _es_titulo(linea):
+    return not any(NUMERO.fullmatch(w[4]) for w in linea["w"])
+
+
 def _encabezado(lineas):
-    """Devuelve (índice de la última línea del encabezado, columnas) o None."""
+    """Devuelve (índice de la última línea del encabezado, columnas) o None.
+    Junta los títulos partidos en varias líneas ("Precio Venta", "Valor Venta / Unitario")."""
     for i, linea in enumerate(lineas):
         frases = _frases(linea["w"])
         clases = [_clase(f["texto"]) for f in frases]
-        if "descripcion" not in clases or not ({"cantidad", "unitario", "precio", "importe"} & set(clases)):
+        if "descripcion" not in clases or not ({"cantidad", "unitario", "precio", "importe", "codigo", "um"} & set(clases)):
             continue
-        fin = i
-        # encabezados partidos en dos líneas ("Valor Venta / Unitario")
-        if i + 1 < len(lineas) and lineas[i + 1]["y"] - linea["y"] <= 14 \
-                and not any(NUMERO.fullmatch(w[4]) for w in lineas[i + 1]["w"]):
-            for w in lineas[i + 1]["w"]:
-                centro = (w[0] + w[2]) / 2
-                destino = next((f for f in frases if f["x0"] - 6 <= centro <= f["x1"] + 6), None)
-                if destino:
-                    destino["texto"] += " " + w[4]
-                    destino["x1"] = max(destino["x1"], w[2])
-                else:
-                    frases.append({"texto": w[4], "x0": w[0], "x1": w[2]})
+        extras, fin = [], i
+        if i > 0 and linea["y"] - lineas[i - 1]["y"] <= 14 and _es_titulo(lineas[i - 1]):
+            extras.append(("arriba", lineas[i - 1]))
+        if i + 1 < len(lineas) and lineas[i + 1]["y"] - linea["y"] <= 14 and _es_titulo(lineas[i + 1]):
+            extras.append(("abajo", lineas[i + 1]))
             fin = i + 1
+        for lado, otra in extras:
+            for f in _frases(otra["w"]):
+                destino = next((g for g in frases if max(g["x0"], f["x0"]) < min(g["x1"], f["x1"]) + 6), None)
+                if destino:
+                    destino["texto"] = (f["texto"] + " " + destino["texto"]) if lado == "arriba" \
+                        else (destino["texto"] + " " + f["texto"])
+                    destino["x0"], destino["x1"] = min(destino["x0"], f["x0"]), max(destino["x1"], f["x1"])
+                else:
+                    frases.append(dict(f))
         columnas = sorted(({**f, "clase": _clase(f["texto"]), "centro": (f["x0"] + f["x1"]) / 2} for f in frases),
                           key=lambda c: c["x0"])
         return fin, columnas
     return None
+
+
+def _limites(columnas, tabla):
+    """Separación entre columnas: el espacio en blanco vertical que separa los datos de dos columnas
+    vecinas (así funciona aunque los títulos estén centrados o corridos)."""
+    palabras = [w for linea in tabla for w in linea["w"]]
+    limites = []
+    for a, b in zip(columnas, columnas[1:]):
+        ini, fin = a["centro"], b["centro"]
+        tramos = sorted((max(w[0], ini), min(w[2], fin)) for w in palabras if w[2] > ini and w[0] < fin)
+        huecos, cursor = [], ini
+        for k, (x0, x1) in enumerate(tramos):
+            if x0 > cursor:
+                huecos.append(("inicio" if k == 0 else "medio", cursor, x0))
+            cursor = max(cursor, x1)
+        if fin > cursor:
+            huecos.append(("final" if tramos else "todo", cursor, fin))
+        # El hueco del inicio suele ser solo el espacio sobre un número alineado a la derecha:
+        # se usa únicamente si no hay otro hueco claro.
+        buenos = [h for h in huecos if h[0] != "inicio" and h[2] - h[1] >= 3] or huecos
+        if buenos:
+            _, x0, x1 = max(buenos, key=lambda h: h[2] - h[1])
+            limites.append((x0 + x1) / 2)
+        else:
+            limites.append((a["x1"] + b["x0"]) / 2)
+    return limites
 
 
 def _columna_numero(columnas, w):
@@ -340,13 +404,15 @@ def leer_items_pdf(contenido):
                 tabla.append(linea)
                 y_anterior = linea["y"]
 
-            # 2) Celdas de cada fila, con el límite real de la Descripción
-            desc, desc_fin = _fin_descripcion(columnas, tabla)
+            # 2) Celdas de cada fila, según los espacios en blanco que separan las columnas
+            limites = _limites(columnas, tabla)
             hay_ancla = any(c["clase"] in ("codigo", "cantidad", "item") for c in columnas)
             for linea in tabla:
                 celdas = {}
                 for w in linea["w"]:
-                    celdas.setdefault(columna(w, desc, desc_fin)["clase"] or "otro", []).append(w[4])
+                    centro = (w[0] + w[2]) / 2
+                    col = columnas[sum(1 for x in limites if centro > x)]
+                    celdas.setdefault(col["clase"] or "otro", []).append(w[4])
                 descripcion = " ".join(celdas.get("descripcion", []))
                 importe = _numero(" ".join(celdas.get("importe", [])) or None)
                 tiene_ancla = any(celdas.get(k) for k in ("codigo", "cantidad", "item"))
