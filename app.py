@@ -63,7 +63,10 @@ def pantalla_acceso():
 
 sesion = st.session_state.get("sesion")
 if not sesion:
-    pantalla_acceso()
+    # La pantalla de ingreso se muestra como única página y sin menú, para que no quede
+    # a la vista el menú de la sesión anterior al cerrar sesión.
+    st.navigation([st.Page(pantalla_acceso, title="Ingresar", url_path="ingresar", default=True)],
+                  position="hidden").run()
     st.stop()
 
 # Refresca rol y persona asociada en cada carga (por si el admin los cambió o eliminó la cuenta)
