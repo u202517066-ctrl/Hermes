@@ -27,9 +27,12 @@ def pantalla_acceso():
     tab1, tab2 = st.tabs(["Ingresar", "Crear mi usuario"])
 
     with tab1:
-        u = st.text_input("Correo o usuario", key="login_u")
-        c = st.text_input("Contraseña", type="password", key="login_c")
-        if st.button("Ingresar", type="primary"):
+        # Dentro de un formulario, Enter en cualquier campo equivale a presionar «Ingresar»
+        with st.form("login", border=False):
+            u = st.text_input("Correo o usuario", key="login_u")
+            c = st.text_input("Contraseña", type="password", key="login_c")
+            entrar = st.form_submit_button("Ingresar", type="primary")
+        if entrar:
             datos = seg.verificar(u, c)
             if datos and "error" in datos:
                 st.warning(datos["error"])
