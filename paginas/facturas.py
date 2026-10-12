@@ -217,6 +217,49 @@ def ver_documento_guardado(factura_id, clave):
                    "Puedes adjuntarlo al editarla.")
 
 
+def reemplazar_items(con, factura_id, items):
+    con.execute(text("DELETE FROM facturas_items WHERE factura_id = :f"), {"f": factura_id})
+    items = [it for it in items if it.get("descripcion") or it.get("importe")]
+    if items:
+        con.execute(text("INSERT INTO facturas_items (factura_id, n, descripcion, cantidad, valor_unitario, importe) "
+                         "VALUES (:f, :n, :descripcion, :cantidad, :valor_unitario, :importe)"),
+                    [{**it, "f": factura_id, "n": i} for i, it in enumerate(items, start=1)])
+
+
+def releer_facturas(ids):
+    """Vuelve a leer el documento guardado de cada factura con el lector actual y actualiza sus datos y servicios.
+    Si estaba aprobada u observada, vuelve a aprobación porque sus datos pueden cambiar.
+    Devuelve (releídas, sin_documento)."""
+    releidas, sin_doc = 0, 0
+    actuales = cargar().set_index("id")
+    for fid in ids:
+        doc = documento_de(fid)
+        if not doc:
+            sin_doc += 1
+            continue
+        datos, _ = leer_archivo(doc[0], doc[1])
+        f = actuales.loc[fid]
+        nuevo = {c: (datos[c] if datos[c] not in (None, "") else f[c]) for c in
+                 ("ruc", "proveedor", "comprobante", "fecha_emision", "fecha_vencimiento", "moneda",
+                  "subtotal", "igv", "total")}
+        if not nuevo["fecha_vencimiento"]:
+            nuevo["fecha_vencimiento"] = nuevo["fecha_emision"]
+        for c in ("subtotal", "igv", "total"):
+            nuevo[c] = None if nuevo[c] is None or pd.isna(nuevo[c]) else float(nuevo[c])
+        vuelve = f["estado"] in ("APROBADA", "OBSERVADA")
+        with db.motor().begin() as con:
+            con.execute(text(
+                "UPDATE facturas_proveedores SET ruc = :ruc, proveedor = :proveedor, comprobante = :comprobante, "
+                "fecha_emision = :fecha_emision, fecha_vencimiento = :fecha_vencimiento, moneda = :moneda, "
+                "subtotal = :subtotal, igv = :igv, total = :total" + (
+                    ", estado = 'PENDIENTE', aprobado_por = NULL, fecha_aprobacion = NULL, motivo_observacion = NULL"
+                    if vuelve else "") + " WHERE id = :id"), {**nuevo, "id": int(fid)})
+            if datos["items"]:
+                reemplazar_items(con, int(fid), datos["items"])
+        releidas += 1
+    return releidas, sin_doc
+
+
 def cargar_items(ids=None):
     df = db.consultar("SELECT * FROM facturas_items ORDER BY factura_id, n")
     for c in ("cantidad", "valor_unitario", "importe"):
@@ -577,7 +620,7 @@ with tab_reg:
         st.caption(f"{len(vista)} {'factura' if len(vista) == 1 else 'facturas'}. Total: {totales_por_moneda(vista)}")
         ids = [int(i) for i in editado[editado["Elegir"]]["id"] if int(i) in set(vista["id"])]
 
-        a1, a2, a3, a4, a5 = st.columns([2, 2, 2, 2, 2])
+        a1, a2, a3, a4, a5, a6 = st.columns([2, 2, 2.2, 1.4, 1.4, 1.8])
         fecha_pago = a1.date_input("Fecha de pago", value=hoy, format="DD/MM/YYYY", label_visibility="collapsed")
 
         def actualizar(sql, extra, mensaje):
@@ -599,6 +642,16 @@ with tab_reg:
                        {}, f"{n} enviada(s) otra vez a aprobación.")
         if a4.button("Anular", disabled=not ids):
             actualizar("UPDATE facturas_proveedores SET estado = 'ANULADA' WHERE id = :id", {}, f"{n} anulada(s).")
+        if a6.button("Volver a leer", disabled=not ids,
+                     help="Relee el documento guardado con el lector actual y actualiza los datos y servicios"):
+            with st.spinner("Volviendo a leer los documentos..."):
+                releidas, sin_doc = releer_facturas(ids)
+            aviso = f"Se {'volvió' if releidas == 1 else 'volvieron'} a leer {releidas} " \
+                    f"{'factura' if releidas == 1 else 'facturas'}."
+            if sin_doc:
+                aviso += f" {sin_doc} no {'tiene' if sin_doc == 1 else 'tienen'} documento guardado: " \
+                         "adjúntalo con Editar o vuelve a cargarlas."
+            listo(aviso)
         if a5.button("Eliminar", disabled=not ids):
             st.session_state["fa_confirmar"] = ids
         if st.session_state.get("fa_confirmar") and st.session_state["fa_confirmar"] == ids:
@@ -630,6 +683,11 @@ with tab_reg:
                 n_igv = e8.number_input("IGV", value=float(f["igv"]), min_value=0.0, format="%.2f", key=f"ed_i_{ids[0]}")
                 n_tot = e9.number_input("Total", value=float(f["total"]), min_value=0.0, format="%.2f", key=f"ed_t_{ids[0]}")
                 n_obs = st.text_input("Observación", f["observacion"] or "", key=f"ed_o_{ids[0]}")
+                st.markdown("Detalle de servicios")
+                items_actuales = cargar_items([ids[0]])
+                n_items = st.data_editor(tabla_items(items_actuales.to_dict("records")), key=f"ed_it_{ids[0]}",
+                                         num_rows="dynamic", hide_index=True, width="stretch",
+                                         column_config=COLS_ITEMS)
                 adjunto = st.file_uploader("Adjuntar o reemplazar el documento (opcional)",
                                            type=["pdf", "xml", "zip", "png", "jpg", "jpeg", "webp"],
                                            key=f"ed_doc_{ids[0]}")
@@ -643,6 +701,8 @@ with tab_reg:
                         if adjunto is not None:
                             with db.motor().begin() as con:
                                 guardar_documento(con, ids[0], adjunto.name, adjunto.getvalue())
+                        with db.motor().begin() as con:
+                            reemplazar_items(con, ids[0], limpiar_items(n_items))
                         db.ejecutar(
                             "UPDATE facturas_proveedores SET proveedor = :p, ruc = :r, comprobante = :c, "
                             "fecha_emision = :e, fecha_vencimiento = :v, moneda = :m, subtotal = :s, igv = :i, "
