@@ -239,115 +239,75 @@ def tabla_items(items):
 
 
 def excel(df):
-    """Excel con el listado filtrado (hoja Facturas) y el detalle de servicios (hoja Detalle)."""
+    """Excel con una fila por servicio: los datos de la factura se repiten en cada fila de sus servicios.
+    Subtotal, IGV y Total van solo en la primera fila de cada factura, para que las sumas no se dupliquen."""
     wb = Workbook()
     ws = wb.active
     ws.title = "Facturas"
-    azul, borde = "0B4F9C", Side(style="thin", color="D5E2F3")
-    columnas = ["Proveedor", "RUC", "Comprobante", "Fecha emisión", "Fecha vencimiento", "Moneda",
-                "Subtotal", "IGV", "Total", "Estado", "Aprobado por", "Fecha aprobación", "Fecha de pago",
-                "Observación"]
-    anchos = [34, 14, 16, 14, 17, 9, 14, 12, 14, 20, 24, 16, 14, 34]
-
-    # Servicios de cada factura en columnas: Servicio 1, Cantidad 1, Valor unitario 1, Importe 1, Servicio 2...
-    items = cargar_items(df["id"].tolist())
-    por_factura = {fid: g.sort_values("n") for fid, g in items.groupby("factura_id")}
-    max_items = max((len(g) for g in por_factura.values()), default=0)
-    celeste = "D6E4F5"
-    base_cols = len(columnas)
-    for n in range(1, max_items + 1):
-        columnas += [f"Servicio {n}", f"Cantidad {n}", f"Valor unitario {n}", f"Importe {n}"]
-        anchos += [44, 11, 15, 14]
+    azul, celeste, borde = "0B4F9C", "D6E4F5", Side(style="thin", color="D5E2F3")
+    columnas = ["Proveedor", "RUC", "Comprobante", "Fecha emisión", "Fecha vencimiento", "Moneda", "Estado",
+                "N.°", "Descripción del servicio", "Cantidad", "Valor unitario", "Importe",
+                "Subtotal factura", "IGV factura", "Total factura",
+                "Aprobado por", "Fecha aprobación", "Fecha de pago", "Observación"]
+    anchos = [32, 13, 16, 13, 13, 8, 18, 6, 50, 10, 13, 13, 14, 12, 14, 22, 13, 13, 30]
+    servicio = range(8, 13)  # columnas del servicio, en celeste
+    fechas, montos = (4, 5, 17, 18), (10, 11, 12, 13, 14, 15)
 
     ws["A1"] = "FACTURAS DE PROVEEDORES"
     ws["A1"].font = Font(bold=True, size=14, color=azul)
-    ws["A2"] = f"Generado el {hoy:%d/%m/%Y}"
+    ws["A2"] = f"Generado el {hoy:%d/%m/%Y}. Una fila por servicio; los montos de la factura van en su primera fila."
     ws["A2"].font = Font(italic=True, color="6A7C99")
     for i, (titulo, ancho) in enumerate(zip(columnas, anchos), start=1):
         c = ws.cell(row=4, column=i, value=titulo)
-        c.font = Font(bold=True, color="FFFFFF")
-        c.fill = PatternFill("solid", start_color=azul)
+        if i in servicio:
+            c.font, c.fill = Font(bold=True, color=azul), PatternFill("solid", start_color=celeste)
+        else:
+            c.font, c.fill = Font(bold=True, color="FFFFFF"), PatternFill("solid", start_color=azul)
         c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-        if i > base_cols:  # encabezados de servicios en celeste, para distinguirlos
-            c.fill = PatternFill("solid", start_color=celeste)
-            c.font = Font(bold=True, color=azul)
         ws.column_dimensions[get_column_letter(i)].width = ancho
+    ws.row_dimensions[4].height = 30
 
+    items = cargar_items(df["id"].tolist())
+    por_factura = {fid: g.sort_values("n") for fid, g in items.groupby("factura_id")}
     fila = 5
     for r in df.itertuples():
-        valores = [
-            r.proveedor, r.ruc, r.comprobante,
-            a_fecha(r.fecha_emision),
-            a_fecha(r.fecha_vencimiento),
-            r.moneda, float(r.subtotal), float(r.igv), float(r.total), r.situacion,
-            r.aprobado_por, a_fecha(r.fecha_aprobacion),
-            a_fecha(r.fecha_pago),
-            "; ".join(x for x in (r.observacion, f"Observada: {r.motivo_observacion}" if r.motivo_observacion else None) if x),
-        ]
+        cabecera = [r.proveedor, r.ruc, r.comprobante, a_fecha(r.fecha_emision), a_fecha(r.fecha_vencimiento),
+                    r.moneda, r.situacion]
+        cierre = [r.aprobado_por, a_fecha(r.fecha_aprobacion), a_fecha(r.fecha_pago),
+                  "; ".join(x for x in (r.observacion, f"Observada: {r.motivo_observacion}"
+                                        if r.motivo_observacion else None) if x)]
         servicios = por_factura.get(r.id)
-        if servicios is not None:
-            for it in servicios.itertuples():
-                valores += [it.descripcion,
-                            None if pd.isna(it.cantidad) else float(it.cantidad),
-                            None if pd.isna(it.valor_unitario) else float(it.valor_unitario),
-                            None if pd.isna(it.importe) else float(it.importe)]
-        for col, v in enumerate(valores, start=1):
-            c = ws.cell(row=fila, column=col, value=v)
-            c.border = Border(bottom=borde)
-            c.alignment = Alignment(vertical="top", wrap_text=col > base_cols and (col - base_cols) % 4 == 1)
-            if col in (4, 5, 12, 13):
-                c.number_format = "dd/mm/yyyy"
-            elif col in (7, 8, 9) or (col > base_cols and (col - base_cols) % 4 != 1):
-                c.number_format = "#,##0.00"
-        fila += 1
+        lineas = list(servicios.itertuples()) if servicios is not None else [None]
+        for k, it in enumerate(lineas):
+            detalle = [None] * 5 if it is None else [
+                it.n, it.descripcion,
+                None if pd.isna(it.cantidad) else float(it.cantidad),
+                None if pd.isna(it.valor_unitario) else float(it.valor_unitario),
+                None if pd.isna(it.importe) else float(it.importe)]
+            montos_factura = [float(r.subtotal), float(r.igv), float(r.total)] if k == 0 else [None] * 3
+            for col, v in enumerate(cabecera + detalle + montos_factura + cierre, start=1):
+                c = ws.cell(row=fila, column=col, value=v)
+                c.border = Border(bottom=borde)
+                c.alignment = Alignment(vertical="top", wrap_text=(col == 9))
+                if col in fechas:
+                    c.number_format = "dd/mm/yyyy"
+                elif col in montos:
+                    c.number_format = "#,##0.00"
+            fila += 1
 
     ultima = fila - 1
     if ultima >= 5:
         fila += 1
         for moneda in sorted(df["moneda"].unique()):
-            ws.cell(row=fila, column=8, value=f"Total {moneda}").font = Font(bold=True)
-            c = ws.cell(row=fila, column=9, value=f'=SUMIF(F5:F{ultima},"{moneda}",I5:I{ultima})')
+            ws.cell(row=fila, column=14, value=f"Total {moneda}").font = Font(bold=True)
+            c = ws.cell(row=fila, column=15, value=f'=SUMIF(F5:F{ultima},"{moneda}",O5:O{ultima})')
             c.font, c.number_format = Font(bold=True), "#,##0.00"
             fila += 1
         ws.auto_filter.ref = f"A4:{get_column_letter(len(columnas))}{ultima}"
-    ws.freeze_panes = "A5"
+    ws.freeze_panes = "D5"
     ws.page_setup.orientation = "landscape"
     ws.page_setup.fitToWidth, ws.page_setup.fitToHeight = 1, 0
     ws.sheet_properties.pageSetUpPr.fitToPage = True
-
-    # Hoja 2: una fila por servicio
-    wd = wb.create_sheet("Detalle")
-    cols_d = ["Proveedor", "RUC", "Comprobante", "Fecha emisión", "Moneda", "N.°", "Descripción",
-              "Cantidad", "Valor unitario", "Importe"]
-    for i, (titulo, ancho) in enumerate(zip(cols_d, [34, 14, 16, 14, 9, 6, 50, 11, 15, 14]), start=1):
-        c = wd.cell(row=1, column=i, value=titulo)
-        c.font = Font(bold=True, color="FFFFFF")
-        c.fill = PatternFill("solid", start_color=azul)
-        c.alignment = Alignment(horizontal="center", vertical="center")
-        wd.column_dimensions[get_column_letter(i)].width = ancho
-    cab = df.set_index("id")
-    fila = 2
-    for it in items.itertuples():
-        f = cab.loc[it.factura_id]
-        valores = [f["proveedor"], f["ruc"], f["comprobante"],
-                   a_fecha(f["fecha_emision"]), f["moneda"],
-                   it.n, it.descripcion,
-                   None if pd.isna(it.cantidad) else float(it.cantidad),
-                   None if pd.isna(it.valor_unitario) else float(it.valor_unitario),
-                   None if pd.isna(it.importe) else float(it.importe)]
-        for col, v in enumerate(valores, start=1):
-            c = wd.cell(row=fila, column=col, value=v)
-            c.border = Border(bottom=borde)
-            if col == 4:
-                c.number_format = "dd/mm/yyyy"
-            elif col in (8, 9, 10):
-                c.number_format = "#,##0.00"
-            elif col == 7:
-                c.alignment = Alignment(wrap_text=True, vertical="top")
-        fila += 1
-    if fila > 2:
-        wd.auto_filter.ref = f"A1:J{fila - 1}"
-    wd.freeze_panes = "A2"
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
