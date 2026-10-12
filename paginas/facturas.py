@@ -90,8 +90,25 @@ def cargar():
             df[c] = None
     df["vencida"] = df["estado"].isin(NO_PAGADAS) & (df["fecha_vencimiento"].fillna("9999") < hoy.isoformat())
     df["situacion"] = df["estado"].map(ESTADOS).fillna(df["estado"])
-    df.loc[df["vencida"], "situacion"] = df.loc[df["vencida"], "situacion"] + " (vencida)"
+    df["dias"] = [(date.fromisoformat(v) - hoy).days if isinstance(v, str) and v else None
+                  for v in df["fecha_vencimiento"]]
+    df["alerta"] = [alerta(e, d) for e, d in zip(df["estado"], df["dias"])]
     return df
+
+
+def alerta(estado, dias, iconos=True):
+    """Texto de alerta según los días que faltan para el vencimiento (solo facturas no pagadas)."""
+    if estado not in NO_PAGADAS or dias is None or pd.isna(dias):
+        return ""
+    dias = int(dias)
+    rojo, ambar = ("🔴 ", "🟡 ") if iconos else ("", "")
+    if dias < 0:
+        return f"{rojo}Vencida hace {-dias} {'día' if dias == -1 else 'días'}"
+    if dias == 0:
+        return f"{rojo}Vence hoy"
+    if dias <= DIAS_ALERTA:
+        return f"{ambar}Vence en {dias} {'día' if dias == 1 else 'días'}"
+    return ""
 
 
 def guardar(filas):
@@ -248,8 +265,8 @@ def excel(df):
     columnas = ["Proveedor", "RUC", "Comprobante", "Fecha emisión", "Fecha vencimiento", "Moneda", "Estado",
                 "N.°", "Descripción del servicio", "Cantidad", "Valor unitario", "Importe",
                 "Subtotal factura", "IGV factura", "Total factura",
-                "Aprobado por", "Fecha aprobación", "Fecha de pago", "Observación"]
-    anchos = [32, 13, 16, 13, 13, 8, 18, 6, 50, 10, 13, 13, 14, 12, 14, 22, 13, 13, 30]
+                "Aprobado por", "Fecha aprobación", "Fecha de pago", "Observación", "Alerta"]
+    anchos = [32, 13, 16, 13, 13, 8, 18, 6, 50, 10, 13, 13, 14, 12, 14, 22, 13, 13, 30, 22]
     servicio = range(8, 13)  # columnas del servicio, en celeste
     fechas, montos = (4, 5, 17, 18), (10, 11, 12, 13, 14, 15)
 
@@ -275,7 +292,8 @@ def excel(df):
                     r.moneda, r.situacion]
         cierre = [r.aprobado_por, a_fecha(r.fecha_aprobacion), a_fecha(r.fecha_pago),
                   "; ".join(x for x in (r.observacion, f"Observada: {r.motivo_observacion}"
-                                        if r.motivo_observacion else None) if x)]
+                                        if r.motivo_observacion else None) if x),
+                  alerta(r.estado, r.dias, iconos=False)]
         servicios = por_factura.get(r.id)
         lineas = list(servicios.itertuples()) if servicios is not None else [None]
         for k, it in enumerate(lineas):
@@ -344,14 +362,6 @@ def detalle(df, verbo):
     return "; ".join(partes) + extra
 
 
-if not vencidas.empty:
-    st.error(f"**{len(vencidas)} {'factura vencida' if len(vencidas) == 1 else 'facturas vencidas'}** sin pagar "
-             f"por {totales_por_moneda(vencidas)}: {detalle(vencidas, 'venció')}.")
-if not proximas.empty:
-    st.warning(f"**{len(proximas)} {'vence' if len(proximas) == 1 else 'vencen'} en los próximos {DIAS_ALERTA} días** "
-               f"por {totales_por_moneda(proximas)}: {detalle(proximas, 'vence')}.")
-
-
 def nombre_actual():
     u = db.uno("SELECT nombre, apellido FROM usuarios WHERE usuario = :u", {"u": sesion.get("usuario")})
     nombre = f"{u.nombre or ''} {u.apellido or ''}".strip() if u else ""
@@ -372,7 +382,7 @@ if rol == "aprobador_facturas":
             "Emisión": pend["fecha_emision"].map(fecha_corta),
             "Vence": pend["fecha_vencimiento"].map(fecha_corta),
             "Total": [dinero(t, m) for t, m in zip(pend["total"], pend["moneda"])],
-            "Alerta": ["Vencida" if v else "" for v in pend["vencida"]],
+            "Alerta": pend["alerta"],
             "id": pend["id"],
         })
         editado = st.data_editor(
@@ -430,11 +440,86 @@ if rol == "aprobador_facturas":
 
 # ---------- Vista del administrador ----------
 if not observadas.empty:
-    st.warning(f"**{len(observadas)} {'factura observada' if len(observadas) == 1 else 'facturas observadas'}** "
-               "por el aprobador. Corrígelas y reenvíalas a aprobación: " + "; ".join(
-                   f"{r.proveedor} ({r.comprobante}): {r.motivo_observacion}" for r in observadas.head(5).itertuples()))
+    st.warning(f"Tienes **{len(observadas)} {'factura observada' if len(observadas) == 1 else 'facturas observadas'}** "
+               "por el aprobador. El motivo está en la columna «Observación» del Registro.")
 
-tab_reg, tab_cargar, tab_mano = st.tabs(["Registro", "Cargar facturas", "Agregar a mano"])
+tab_dash, tab_reg, tab_cargar, tab_mano = st.tabs(["Dashboard", "Registro", "Cargar facturas", "Agregar a mano"])
+
+# ---------- Dashboard ----------
+with tab_dash:
+    if facturas.empty:
+        st.info("Todavía no hay facturas. Cárgalas en la pestaña «Cargar facturas».")
+    else:
+        d1, d2, d3 = st.columns([3, 3, 1.4])
+        sel_prov = d1.multiselect("Proveedor", sorted(facturas["proveedor"].dropna().unique()),
+                                  placeholder="Todos los proveedores", key="db_prov")
+        sel_est = d2.multiselect("Estado", list(ESTADOS.values()),
+                                 default=[ESTADOS[e] for e in NO_PAGADAS], placeholder="Todos los estados",
+                                 key="db_est")
+        monedas = sorted(facturas["moneda"].unique())
+        moneda = d3.selectbox("Moneda", monedas, key="db_mon") if len(monedas) > 1 else monedas[0]
+
+        v = facturas[facturas["moneda"] == moneda]
+        if sel_prov:
+            v = v[v["proveedor"].isin(sel_prov)]
+        if sel_est:
+            v = v[v["situacion"].isin(sel_est)]
+        pend = v[v["estado"].isin(NO_PAGADAS)]
+        venc = pend[pend["vencida"]]
+        prox = pend[(pend["dias"] >= 0) & (pend["dias"] <= DIAS_ALERTA)]
+        sim = SIMBOLO.get(moneda, moneda)
+
+        k1, k2, k3, k4 = st.columns(4)
+        k1.metric("Pendiente de pago", f"{sim} {pend['total'].sum():,.2f}", f"{len(pend)} facturas", delta_color="off")
+        k2.metric("Vencido", f"{sim} {venc['total'].sum():,.2f}", f"{len(venc)} facturas", delta_color="off")
+        k3.metric(f"Vence en {DIAS_ALERTA} días", f"{sim} {prox['total'].sum():,.2f}", f"{len(prox)} facturas",
+                  delta_color="off")
+        k4.metric("Facturas en el filtro", len(v), f"{sim} {v['total'].sum():,.2f}", delta_color="off")
+
+        if v.empty:
+            st.info("No hay facturas con esos filtros.")
+        else:
+            g1, g2 = st.columns(2)
+            with g1:
+                st.markdown("**Monto por proveedor**")
+                por_prov = v.groupby(["proveedor", "situacion"], as_index=False)["total"].sum() \
+                            .rename(columns={"proveedor": "Proveedor", "situacion": "Estado", "total": "Monto"})
+                st.bar_chart(por_prov, x="Proveedor", y="Monto", color="Estado", horizontal=True,
+                             height=max(220, 38 * por_prov["Proveedor"].nunique()))
+            with g2:
+                st.markdown("**Antigüedad de lo pendiente**")
+                tramos = ["Vencida más de 60 días", "Vencida 31 a 60 días", "Vencida 1 a 30 días",
+                          f"Vence en 0 a {DIAS_ALERTA} días", f"Vence en más de {DIAS_ALERTA} días"]
+
+                def tramo(d):
+                    if d is None or pd.isna(d):
+                        return tramos[4]
+                    return (tramos[0] if d < -60 else tramos[1] if d < -30 else tramos[2] if d < 0
+                            else tramos[3] if d <= DIAS_ALERTA else tramos[4])
+
+                if pend.empty:
+                    st.caption("No hay facturas pendientes de pago con esos filtros.")
+                else:
+                    ant = pend.assign(Tramo=pend["dias"].map(tramo)).groupby("Tramo")["total"].sum() \
+                              .reindex(tramos, fill_value=0).reset_index().rename(columns={"total": "Monto"})
+                    st.bar_chart(ant, x="Tramo", y="Monto", horizontal=True, height=240,
+                                 color="#0B4F9C", sort=False)
+
+            st.markdown("**Facturas**")
+            tabla_d = v.sort_values(["vencida", "fecha_vencimiento"], ascending=[False, True])
+            vista_d = pd.DataFrame({
+                "Proveedor": tabla_d["proveedor"], "Comprobante": tabla_d["comprobante"],
+                "Emisión": tabla_d["fecha_emision"].map(fecha_corta),
+                "Vence": tabla_d["fecha_vencimiento"].map(fecha_corta),
+                "Total": [dinero(t, m) for t, m in zip(tabla_d["total"], tabla_d["moneda"])],
+                "Estado": tabla_d["situacion"], "Alerta": tabla_d["alerta"],
+            })
+
+            def color_alerta(col):
+                return ["background-color: #FDECEC; color: #B42318" if "🔴" in str(x)
+                        else "background-color: #FEF6E4; color: #8A5A00" if "🟡" in str(x) else "" for x in col]
+
+            st.dataframe(vista_d.style.apply(color_alerta, subset=["Alerta"]), hide_index=True, width="stretch")
 
 # ---------- Registro ----------
 with tab_reg:
@@ -469,15 +554,18 @@ with tab_reg:
             "Vence": vista["fecha_vencimiento"].map(fecha_corta),
             "Total": [dinero(t, m) for t, m in zip(vista["total"], vista["moneda"])],
             "Estado": vista["situacion"],
+            "Alerta": vista["alerta"],
             "Aprobó": vista["aprobado_por"].fillna(""),
+            "Observación": vista["motivo_observacion"].fillna(""),
             "Pagada el": vista["fecha_pago"].map(fecha_corta),
             "id": vista["id"],
         })
         editado = st.data_editor(
             tabla, key=f"fa_tabla_{st.session_state['fa_ronda']}", hide_index=True, width="stretch",
-            column_order=["Elegir", "Proveedor", "Comprobante", "Emisión", "Vence", "Total", "Estado", "Aprobó",
-                          "Pagada el"],
-            disabled=["Proveedor", "Comprobante", "Emisión", "Vence", "Total", "Estado", "Aprobó", "Pagada el"],
+            column_order=["Elegir", "Proveedor", "Comprobante", "Emisión", "Vence", "Total", "Estado", "Alerta",
+                          "Aprobó", "Observación", "Pagada el"],
+            disabled=["Proveedor", "Comprobante", "Emisión", "Vence", "Total", "Estado", "Alerta", "Aprobó",
+                      "Observación", "Pagada el"],
             column_config={"Elegir": st.column_config.CheckboxColumn("Elegir", width="small")},
         )
         st.caption(f"{len(vista)} {'factura' if len(vista) == 1 else 'facturas'}. Total: {totales_por_moneda(vista)}")
