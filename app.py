@@ -9,13 +9,19 @@ import seguridad as seg
 from reglas_vacaciones import jefes_por_area
 
 CARPETA = Path(__file__).resolve().parent
-st.set_page_config(page_title="HERMES", page_icon="🛡️", layout="wide")
+
+st.set_page_config(
+    page_title="HERMES",
+    page_icon="🛡️",
+    layout="wide",
+)
+
 estilo.aplicar()
 
 
 @st.cache_resource
 def iniciar_bd(tablas):
-    # Se vuelve a ejecutar sola cuando db.py agrega tablas nuevas
+    # Se vuelve a ejecutar cuando cambia la versión del esquema.
     db.crear_tablas()
     return True
 
@@ -23,7 +29,10 @@ def iniciar_bd(tablas):
 try:
     iniciar_bd(tuple(db.TABLAS) + (db.VERSION_ESQUEMA,))
 except Exception as e:
-    st.error("No se pudo conectar a la base de datos. Revisa DB_URL en los secrets.")
+    st.error(
+        "No se pudo conectar a la base de datos. "
+        "Revisa DB_URL en los secrets."
+    )
     st.caption(f"{type(e).__name__}: {str(e)[:300]}")
     st.stop()
 
@@ -35,6 +44,7 @@ RUTA_SVG = """<svg viewBox="0 0 600 320" preserveAspectRatio="none" aria-hidden=
  stroke-width="2" stroke-dasharray="14 12"/>
 <circle cx="280" cy="150" r="9" fill="#E9A23B"/>
 <circle cx="280" cy="150" r="18" fill="none" stroke="#E9A23B" stroke-opacity="0.45" stroke-width="2"/></svg>"""
+
 
 CSS_ACCESO = """<style>
 section[data-testid="stSidebar"], [data-testid="stSidebarCollapsedControl"] { display: none; }
@@ -53,35 +63,61 @@ div[data-testid="stForm"] { background: transparent !important; border: 0 !impor
 .h-ruta { position: absolute; left: 0; right: 0; bottom: 0; width: 100%; height: 52%; }
 .h-acceso-titulo { font-size: 1.7rem; font-weight: 700; margin: 3.2rem 0 0.2rem; color: var(--h-tinta); }
 .h-acceso-sub { color: var(--h-suave); margin-bottom: 1.2rem; }
-@media (max-width: 760px) { .st-key-acceso .h-acceso-marca { min-height: 220px; } .h-acceso-titulo { margin-top: 0.5rem; }
-  .st-key-acceso_form { padding: 6px 20px 24px; } }
+@media (max-width: 760px) {
+  .st-key-acceso .h-acceso-marca { min-height: 220px; }
+  .h-acceso-titulo { margin-top: 0.5rem; }
+  .st-key-acceso_form { padding: 6px 20px 24px; }
+}
 </style>"""
 
 
 def pantalla_acceso():
     st.markdown(CSS_ACCESO, unsafe_allow_html=True)
+
     tarjeta = st.container(key="acceso")
     izq, der = tarjeta.columns([1.05, 1], gap="small")
+
     with izq:
         st.markdown(
-            f"""<div class="h-acceso-marca"><div class="logo">HERMES</div>
+            f"""<div class="h-acceso-marca">
+<div class="logo">HERMES</div>
 <p>Vacaciones, teletrabajo y aprobaciones del equipo comercial, en un solo lugar.</p>
-{RUTA_SVG}<footer>Hermes Transportes Blindados</footer></div>""",
+{RUTA_SVG}
+<footer>Hermes Transportes Blindados</footer>
+</div>""",
             unsafe_allow_html=True,
         )
+
     with der, st.container(key="acceso_form"):
         if st.session_state.get("acceso_modo") != "registro":
-            st.markdown('<div class="h-acceso-titulo">Ingresa a tu cuenta</div>'
-                        '<div class="h-acceso-sub">Usa el correo con el que te registraste.</div>',
-                        unsafe_allow_html=True)
-            # Dentro de un formulario, Enter en cualquier campo equivale a presionar «Ingresar»
+            st.markdown(
+                '<div class="h-acceso-titulo">Ingresa a tu cuenta</div>'
+                '<div class="h-acceso-sub">Usa el correo con el que te registraste.</div>',
+                unsafe_allow_html=True,
+            )
+
             with st.form("login", border=False):
-                u = st.text_input("Correo o usuario", key="login_u", placeholder="nombre@hermes.com.pe")
-                c = st.text_input("Contraseña", type="password", key="login_c")
-                entrar = st.form_submit_button("Ingresar", type="primary", use_container_width=True)
+                u = st.text_input(
+                    "Correo o usuario",
+                    key="login_u",
+                    placeholder="nombre@hermes.com.pe",
+                )
+                c = st.text_input(
+                    "Contraseña",
+                    type="password",
+                    key="login_c",
+                )
+                entrar = st.form_submit_button(
+                    "Ingresar",
+                    type="primary",
+                    use_container_width=True,
+                )
+
             st.caption("También puedes presionar Enter para ingresar.")
+
             if entrar:
                 datos = seg.verificar(u, c)
+
                 if datos and "error" in datos:
                     st.warning(datos["error"])
                 elif datos:
@@ -89,24 +125,53 @@ def pantalla_acceso():
                     st.rerun()
                 else:
                     st.error("Usuario o contraseña incorrectos.")
+
             st.divider()
             st.markdown("¿Primera vez en HERMES?")
+
             if st.button("Crear mi usuario", type="tertiary"):
                 st.session_state["acceso_modo"] = "registro"
                 st.rerun()
+
         else:
-            st.markdown('<div class="h-acceso-titulo">Crea tu usuario</div>'
-                        '<div class="h-acceso-sub">El administrador aprobará tu cuenta antes de que puedas ingresar.</div>',
-                        unsafe_allow_html=True)
+            st.markdown(
+                '<div class="h-acceso-titulo">Crea tu usuario</div>'
+                '<div class="h-acceso-sub">El administrador aprobará tu cuenta antes de que puedas ingresar.</div>',
+                unsafe_allow_html=True,
+            )
+
             with st.form("registro", border=False):
                 c1, c2 = st.columns(2)
+
                 nombre = c1.text_input("Nombre", key="r_nombre")
                 apellido = c2.text_input("Apellido", key="r_apellido")
-                correo = st.text_input("Correo", key="r_correo", placeholder="nombre@hermes.com.pe")
+
+                correo = st.text_input(
+                    "Correo",
+                    key="r_correo",
+                    placeholder="nombre@hermes.com.pe",
+                )
+
                 c3, c4 = st.columns(2)
-                k1 = c3.text_input("Contraseña", type="password", key="r_c1", help="Mínimo 6 caracteres")
-                k2 = c4.text_input("Repite la contraseña", type="password", key="r_c2")
-                crear = st.form_submit_button("Crear mi usuario", type="primary", use_container_width=True)
+
+                k1 = c3.text_input(
+                    "Contraseña",
+                    type="password",
+                    key="r_c1",
+                    help="Mínimo 6 caracteres",
+                )
+                k2 = c4.text_input(
+                    "Repite la contraseña",
+                    type="password",
+                    key="r_c2",
+                )
+
+                crear = st.form_submit_button(
+                    "Crear mi usuario",
+                    type="primary",
+                    use_container_width=True,
+                )
+
             if crear:
                 if len(k1) < 6:
                     st.error("La contraseña debe tener al menos 6 caracteres.")
@@ -114,80 +179,197 @@ def pantalla_acceso():
                     st.error("Las contraseñas no coinciden.")
                 else:
                     error = seg.registrar(nombre, apellido, correo, k1)
+
                     if error:
                         st.error(error)
                     else:
-                        st.success("Solicitud enviada. Podrás ingresar cuando el administrador apruebe tu cuenta.")
+                        st.success(
+                            "Solicitud enviada. Podrás ingresar cuando "
+                            "el administrador apruebe tu cuenta."
+                        )
+
             if st.button("Ya tengo usuario: ingresar", type="tertiary"):
                 st.session_state["acceso_modo"] = "ingreso"
                 st.rerun()
 
 
 sesion = st.session_state.get("sesion")
+
 if not sesion:
-    # La pantalla de ingreso se muestra como única página y sin menú, para que no quede
-    # a la vista el menú de la sesión anterior al cerrar sesión.
-    st.navigation([st.Page(pantalla_acceso, title="Ingresar", url_path="ingresar", default=True)],
-                  position="hidden").run()
+    st.navigation(
+        [
+            st.Page(
+                pantalla_acceso,
+                title="Ingresar",
+                url_path="ingresar",
+                default=True,
+            )
+        ],
+        position="hidden",
+    ).run()
     st.stop()
 
-# Refresca rol y persona asociada en cada carga (por si el admin los cambió o eliminó la cuenta)
+
+# Actualiza el rol y la persona asociada en cada carga.
 actual = seg.datos_usuario(sesion["usuario"])
+
 if not actual or actual["estado"] != "ACTIVO":
     st.session_state.pop("sesion", None)
     st.rerun()
+
 sesion.update(rol=actual["rol"], cod=actual["cod"])
-# Los jefes de área (reglas_vacaciones.APROBADORES) entran como jefes aunque en Perfiles figuren como colaborador
+
+
+# Los jefes de área también entran como jefes.
 if sesion["rol"] == "colaborador" and sesion["cod"]:
-    if sesion["cod"] in jefes_por_area(db.consultar("SELECT cod, nombre, area FROM rrhh_personal")).values():
+    personal = db.consultar(
+        "SELECT cod, nombre, area FROM rrhh_personal"
+    )
+
+    if sesion["cod"] in jefes_por_area(personal).values():
         sesion["rol"] = "jefe"
+
 
 rol = sesion["rol"]
 es_jefatura = rol in ("jefe", "admin")
 
-NOMBRE_ROL = {"colaborador": "Colaborador", "jefe": "Jefe", "admin": "Administrador",
-              "aprobador_facturas": "Aprobador de facturas"}
-ficha = db.uno("SELECT nombre, puesto FROM rrhh_personal WHERE cod = :c", {"c": sesion["cod"]}) if sesion["cod"] else None
-nombre_mostrar = (estilo.bonito(ficha.nombre) if ficha else
-                  " ".join(x for x in (actual.get("nombre"), actual.get("apellido")) if x) or sesion["usuario"])
-sesion["nombre"] = nombre_mostrar
-detalle = estilo.bonito(ficha.puesto) if ficha and ficha.puesto else NOMBRE_ROL.get(rol, rol)
+NOMBRE_ROL = {
+    "colaborador": "Colaborador",
+    "jefe": "Jefe",
+    "admin": "Administrador",
+    "aprobador_facturas": "Aprobador de facturas",
+}
 
-# Logo del menú: si falta la carpeta assets, la app sigue funcionando sin él
-logo, icono = CARPETA / "assets" / "logo.svg", CARPETA / "assets" / "icono.svg"
-if logo.exists():
-    st.logo(str(logo), size="large", icon_image=str(icono) if icono.exists() else None)
+ficha = (
+    db.uno(
+        "SELECT nombre, puesto FROM rrhh_personal WHERE cod = :c",
+        {"c": sesion["cod"]},
+    )
+    if sesion["cod"]
+    else None
+)
+
+nombre_mostrar = (
+    estilo.bonito(ficha.nombre)
+    if ficha
+    else " ".join(
+        x for x in (actual.get("nombre"), actual.get("apellido")) if x
+    )
+    or sesion["usuario"]
+)
+
+sesion["nombre"] = nombre_mostrar
+
+detalle = (
+    estilo.bonito(ficha.puesto)
+    if ficha and ficha.puesto
+    else NOMBRE_ROL.get(rol, rol)
+)
+
+
+# Logo opcional: nunca debe impedir que cargue la aplicación.
+logo = CARPETA / "assets" / "logo.svg"
+icono = CARPETA / "assets" / "icono.svg"
+
+if logo.is_file():
+    try:
+        st.logo(
+            str(logo),
+            size="large",
+            icon_image=str(icono) if icono.is_file() else None,
+        )
+    except Exception:
+        # La aplicación continúa aunque el logo no pueda cargarse.
+        pass
 
 
 def pie_menu():
     estilo.tarjeta_usuario(nombre_mostrar, detalle)
-    if st.sidebar.button("Cerrar sesión", icon=":material/logout:", type="tertiary"):
+
+    if st.sidebar.button(
+        "Cerrar sesión",
+        icon=":material/logout:",
+        type="tertiary",
+    ):
         st.session_state.pop("sesion", None)
         st.rerun()
 
 
-if rol == "aprobador_facturas":  # solo ve las facturas
+if rol == "aprobador_facturas":
     pie_menu()
-    st.navigation({"Finanzas": [st.Page("paginas/facturas.py", title="Facturas", icon=":material/receipt_long:",
-                                        default=True)]}).run()
+
+    st.navigation(
+        {
+            "Finanzas": [
+                st.Page(
+                    "paginas/facturas.py",
+                    title="Facturas",
+                    icon=":material/receipt_long:",
+                    default=True,
+                )
+            ]
+        }
+    ).run()
+
     st.stop()
 
-# Pantalla que se abre al entrar: Aprobaciones para jefes y administrador; Vacaciones para colaboradores
+
+# Menú según el rol del usuario.
 menu = {}
+
 if es_jefatura:
     menu["Mi equipo"] = [
-        st.Page("paginas/aprobaciones.py", title="Aprobaciones", icon=":material/task_alt:", default=True),
-        st.Page("paginas/dashboard.py", title="Indicadores", icon=":material/insights:"),
-        st.Page("paginas/directorio.py", title="Directorio", icon=":material/groups:"),
+        st.Page(
+            "paginas/aprobaciones.py",
+            title="Aprobaciones",
+            icon=":material/task_alt:",
+            default=True,
+        ),
+        st.Page(
+            "paginas/dashboard.py",
+            title="Indicadores",
+            icon=":material/insights:",
+        ),
+        st.Page(
+            "paginas/directorio.py",
+            title="Directorio",
+            icon=":material/groups:",
+        ),
     ]
+
 menu["Mi trabajo"] = [
-    st.Page("paginas/vacaciones.py", title="Vacaciones", icon=":material/beach_access:", default=not es_jefatura),
-    st.Page("paginas/teletrabajo.py", title="Teletrabajo", icon=":material/home_work:"),
+    st.Page(
+        "paginas/vacaciones.py",
+        title="Vacaciones",
+        icon=":material/beach_access:",
+        default=not es_jefatura,
+    ),
+    st.Page(
+        "paginas/teletrabajo.py",
+        title="Teletrabajo",
+        icon=":material/home_work:",
+    ),
 ]
+
 if rol == "admin":
-    menu["Finanzas"] = [st.Page("paginas/facturas.py", title="Facturas", icon=":material/receipt_long:")]
-    menu["Administración"] = [st.Page("paginas/perfiles.py", title="Perfiles", icon=":material/manage_accounts:")]
+    menu["Finanzas"] = [
+        st.Page(
+            "paginas/facturas.py",
+            title="Facturas",
+            icon=":material/receipt_long:",
+        )
+    ]
+
+    menu["Administración"] = [
+        st.Page(
+            "paginas/perfiles.py",
+            title="Perfiles",
+            icon=":material/manage_accounts:",
+        )
+    ]
+
 
 pie_menu()
+
 pg = st.navigation(menu)
 pg.run()
