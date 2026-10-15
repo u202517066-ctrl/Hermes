@@ -7,6 +7,7 @@ import streamlit as st
 
 import correo
 import db
+import estilo
 from reglas_vacaciones import (
     APROBADORES, DIAS_BLOQUE, MESES_CICLO,
     inicio_ciclo, jefes_por_area, primer_aniversario, sumar_meses, usados_en_ciclo,
@@ -25,6 +26,24 @@ st.markdown(
 .ap-num { text-align: right; line-height: 1; }
 .ap-num b { font-size: 2.6rem; display: block; }
 .ap-num span { opacity: 0.85; font-size: 0.95rem; }
+.a-cab { display: flex; justify-content: space-between; align-items: baseline; margin: 6px 0 10px; }
+.a-cab b { font-size: 1.05rem; color: var(--h-tinta); }
+.a-cab span { color: var(--h-suave); font-size: 0.9rem; }
+.a-quien h4 { margin: 0; padding: 0; font-size: 1rem; color: var(--h-tinta); }
+.a-quien p { margin: 2px 0 0; color: var(--h-suave); font-size: 0.9rem; }
+.a-ctx { margin-top: 8px; display: flex; gap: 8px; flex-wrap: wrap; }
+.a-pedido { display: grid; grid-template-columns: auto 1fr; gap: 14px; align-items: start; }
+[class*="st-key-pedu_"] { border-left: 4px solid var(--h-ambar) !important; }
+[class*="st-key-ped"] { background: var(--h-superficie); }
+.a-equipo, .a-equipo * { border: 0 !important; }
+.a-equipo { width: 100%; border-collapse: collapse !important; margin: 0; }
+.a-equipo tr { background: transparent !important; border-bottom: 1px solid var(--h-linea) !important; }
+.a-equipo tbody tr:last-child { border-bottom: 0 !important; }
+.a-equipo th { text-align: left; font-size: 0.8rem; color: var(--h-suave); font-weight: 600; padding: 6px 8px; }
+.a-equipo td { padding: 9px 8px; font-size: 0.9rem; color: var(--h-tinta); vertical-align: middle; }
+.a-equipo td small { display: block; color: var(--h-suave); font-size: 0.78rem; }
+.a-barra { height: 8px; background: var(--h-fondo); border-radius: 99px; overflow: hidden; min-width: 80px; margin-bottom: 3px; }
+.a-barra i { display: block; height: 100%; background: var(--h-azul); border-radius: 99px; }
 </style>
 """,
     unsafe_allow_html=True,
@@ -97,27 +116,79 @@ def resolver(id_, nuevo_estado, nombre):
     st.session_state["ap_aviso"] = f"Solicitud de {bonito(nombre)} {ESTADOS[nuevo_estado].lower()}."
 
 
+def rango(a, b):
+    a, b = date.fromisoformat(str(a)), date.fromisoformat(str(b))
+    if (a.year, a.month) == (b.year, b.month):
+        return f"del {a.day} al {b.day} de {estilo.MESES[b.month - 1]}"
+    return f"del {a.day} de {estilo.MESES[a.month - 1]} al {b.day} de {estilo.MESES[b.month - 1]}"
+
+
+def saldo_num(cod):
+    """Días por programar de una persona (contando lo aprobado y lo en espera); None si aún no tiene periodo."""
+    fila = personal[personal["cod"] == cod]
+    if fila.empty:
+        return None
+    try:
+        ingreso = date.fromisoformat(str(fila.iloc[0]["f_ingreso"]))
+    except ValueError:
+        return None
+    c = inicio_ciclo(ingreso, hoy)
+    if c is None:
+        return None
+    u = usados_en_ciclo(activas, cod, c, sumar_meses(c, MESES_CICLO))
+    return 2 * DIAS_BLOQUE - u[1] - u[2]
+
+
+def companeros(cod):
+    """Personas con las que se compara: su grupo de retail, o su área."""
+    fila = personal[personal["cod"] == cod]
+    if fila.empty:
+        return set()
+    f = fila.iloc[0]
+    if str(f["seccion"] or "").upper().startswith("GRUPO"):
+        return set(personal[personal["seccion"] == f["seccion"]]["cod"]) - {cod}
+    return set(personal[personal["area"] == f["area"]]["cod"]) - {cod}
+
+
 def tarjetas(df, prefijo):
     if df.empty:
-        st.info("No hay solicitudes por aprobar.")
+        st.markdown('<div class="h-panel" style="color:var(--h-suave)">No hay solicitudes por aprobar.</div>',
+                    unsafe_allow_html=True)
         return
-    for r in df.itertuples():
-        with st.container(border=True):
-            c1, c2, c3 = st.columns([5, 1, 1])
-            notas = []
-            if r.estado == "PENDIENTE_GERENCIA":
-                notas.append("requiere aprobación de gerencia")
-            if r.inicio < hoy.isoformat():
-                notas.append("la fecha de inicio ya pasó")
-            c1.markdown(
-                f"**{bonito(r.nombre)}**, {bonito(r.puesto)}  \n"
-                f"Del {fecha(r.inicio)} al {fecha(r.fin)}, {r.dias} {'día' if r.dias == 1 else 'días'}"
-                + (f"  \n:orange[{'; '.join(notas).capitalize()}]" if notas else "")
-            )
-            c2.button("Aprobar", key=f"{prefijo}ap{r.id}", type="primary",
-                      on_click=resolver, args=(r.id, "APROBADA", r.nombre))
-            c3.button("Rechazar", key=f"{prefijo}re{r.id}",
+    for r in df.sort_values("inicio").itertuples():
+        ini_d = date.fromisoformat(r.inicio)
+        faltan = (ini_d - hoy).days
+        cuando = ("Empieza hoy" if faltan == 0 else "Empieza mañana" if faltan == 1 else
+                  f"Empieza en {faltan} días" if faltan > 1 else f"Empezó hace {-faltan} {'día' if faltan == -1 else 'días'}")
+        cruces = activas[activas["cod"].isin(companeros(r.cod)) & (activas["id"] != r.id)
+                         & (activas["inicio"] <= r.fin) & (activas["fin"] >= r.inicio)]
+        ctx = []
+        if cruces.empty:
+            ctx.append(estilo.estado_html("Nadie más del equipo sale", "ok"))
+        else:
+            nombres = ", ".join(estilo.nombre_pila(n) for n in cruces["nombre"].unique()[:3])
+            ctx.append(estilo.estado_html(f"Se cruza con {nombres}", "no"))
+        libres = saldo_num(r.cod)
+        if libres is not None:
+            ctx.append(estilo.estado_html(f"Le quedarían {libres} {'día' if libres == 1 else 'días'}",
+                                          "espera" if libres <= 5 else "info"))
+        if r.estado == "PENDIENTE_GERENCIA":
+            ctx.append(estilo.estado_html("La aprueba gerencia", "espera"))
+        if faltan < 0:
+            ctx.append(estilo.estado_html("La fecha de inicio ya pasó", "no"))
+        clave = f"{'pedu' if faltan <= 7 else 'ped'}_{prefijo}{r.id}"
+        with st.container(border=True, key=clave):
+            st.markdown(
+                f'<div class="a-pedido"><span class="h-iniciales">{html.escape(estilo.iniciales(r.nombre))}</span>'
+                f'<div class="a-quien"><h4>{html.escape(bonito(r.nombre))}</h4>'
+                f'<p>Vacaciones {rango(r.inicio, r.fin)}, {int(r.dias)} '
+                f'{"día" if r.dias == 1 else "días"}. {cuando}.</p><div class="a-ctx">{"".join(ctx)}</div></div></div>',
+                unsafe_allow_html=True)
+            _, b1, b2 = st.columns([2.2, 1, 1])
+            b1.button("Rechazar", key=f"{prefijo}re{r.id}", use_container_width=True,
                       on_click=resolver, args=(r.id, "RECHAZADA", r.nombre))
+            b2.button("Aprobar", key=f"{prefijo}ap{r.id}", type="primary", use_container_width=True,
+                      on_click=resolver, args=(r.id, "APROBADA", r.nombre))
 
 
 def resolver_tele(ids, nuevo_estado, nombre):
@@ -214,18 +285,34 @@ def proximas(cod):
     return f"{fecha(r['inicio'], False)} al {fecha(r['fin'], False)} ({ESTADOS[r['estado']].lower()})"
 
 
+def proximo_corto(cod):
+    futuras = activas[(activas["cod"] == cod) & (activas["fin"] >= hoy.isoformat())].sort_values("inicio")
+    if futuras.empty:
+        return "Sin programar"
+    r = futuras.iloc[0]
+    d = date.fromisoformat(r["inicio"])
+    estado = {"APROBADA": "aprobada", "PENDIENTE": "en espera", "PENDIENTE_GERENCIA": "en espera de gerencia"}.get(r["estado"], "")
+    return f"{d.day} {estilo.MESES[d.month - 1][:3]}<small>{estado}</small>"
+
+
 def tabla_personal(equipo):
-    import pandas as pd
-    filas = [{
-        "Colaborador": bonito(p.nombre),
-        "Puesto": bonito(p.puesto),
-        "Días por programar": saldo(p),
-        "Próximas vacaciones": proximas(p.cod),
-        "Teletrabajo del mes": str(int(((tele["cod"] == p.cod) & (tele["estado"] != "RECHAZADO")
-                                        & tele["fecha"].str.startswith(hoy.strftime("%Y-%m"))).sum()) or ""),
-        "En espera": str(int(((sols["cod"] == p.cod) & sols["estado"].str.startswith("PENDIENTE")).sum()) or ""),
-    } for p in equipo.itertuples()]
-    st.dataframe(pd.DataFrame(filas), width="stretch", hide_index=True)
+    filas = []
+    for p in equipo.itertuples():
+        libres = saldo_num(p.cod)
+        if libres is None:
+            try:
+                desde = f"Desde {primer_aniversario(date.fromisoformat(str(p.f_ingreso))):%m/%Y}"
+            except ValueError:
+                desde = "Sin fecha de ingreso"
+            saldo_html = f'<div class="a-barra"><i style="width:0"></i></div><small>{desde}</small>'
+        else:
+            saldo_html = (f'<div class="a-barra"><i style="width:{max(0, min(100, libres * 100 // 30))}%"></i></div>'
+                          f"<small>{libres} de 30</small>")
+        filas.append(f"<tr><td>{html.escape(bonito(p.nombre))}<small>{html.escape(bonito(p.puesto))}</small></td>"
+                     f"<td>{saldo_html}</td><td>{proximo_corto(p.cod)}</td></tr>")
+    st.markdown('<div class="h-panel"><h3>Tu equipo</h3><table class="a-equipo"><thead><tr><th>Colaborador</th>'
+                '<th style="width:30%">Días por programar</th><th style="width:22%">Próximo</th></tr></thead><tbody>'
+                + "".join(filas) + "</tbody></table></div>", unsafe_allow_html=True)
 
 
 def seccion_area(area):
@@ -234,17 +321,23 @@ def seccion_area(area):
                 & (sols["cod"] != mi_cod) & ~sols["cod"].isin(cods_jefes)]
     tpend = tele_pend[(tele_pend["area"] == area) & (tele_pend["cod"] != mi_cod)
                       & ~tele_pend["cod"].isin(cods_jefes)]
-    banda(bonito(area), f"Tu personal: {len(equipo)} {'persona' if len(equipo) == 1 else 'personas'}",
-          len(pend) + tpend["cod"].nunique(), "por aprobar")
-    st.subheader("Vacaciones por aprobar")
-    tarjetas(pend, f"{area[:6]}_")
-    st.subheader("Teletrabajo por aprobar")
+    total = len(pend) + tpend["cod"].nunique()
+    st.markdown(f'<div class="h-sub">{bonito(area)}: '
+                + (f'{total} {"solicitud de tu equipo espera" if total == 1 else "solicitudes de tu equipo esperan"} tu respuesta.'
+                   if total else "no hay solicitudes pendientes.") + "</div>", unsafe_allow_html=True)
+    izq, der = st.columns([1.2, 1], gap="medium")
+    with izq:
+        st.markdown('<div class="a-cab"><b>Vacaciones por aprobar</b><span>La más próxima, primero</span></div>',
+                    unsafe_allow_html=True)
+        tarjetas(pend, f"{area[:6]}_")
+    with der:
+        if equipo.empty:
+            st.info("No hay personal cargado en esta área.")
+        else:
+            tabla_personal(equipo)
+    st.markdown('<div class="a-cab" style="margin-top:18px"><b>Teletrabajo por aprobar</b>'
+                '<span>Una fila por persona, en el orden en que se programó</span></div>', unsafe_allow_html=True)
     tarjetas_tele(tpend, f"{area[:6]}_")
-    st.subheader("Tu personal")
-    if equipo.empty:
-        st.info("No hay personal cargado en esta área.")
-    else:
-        tabla_personal(equipo)
 
 
 # ---------- Jefe (o admin que también es jefe de un área) ----------
@@ -261,8 +354,9 @@ if rol != "admin":
 # ---------- Administrador ----------
 if mis_areas:
     st.divider()
-banda("Administración", "Gerencia, jefaturas y áreas sin jefe",
-      int(sols["estado"].str.startswith("PENDIENTE").sum()) + tele_pend["cod"].nunique(), "en espera en total")
+total_admin = int(sols["estado"].str.startswith("PENDIENTE").sum()) + tele_pend["cod"].nunique()
+st.markdown(f'<div class="h-sub">Gerencia, jefaturas y áreas sin jefe. En total hay {total_admin} '
+            f'{"solicitud" if total_admin == 1 else "solicitudes"} en espera.</div>', unsafe_allow_html=True)
 
 no_encontrados = [f"{bonito(a)} ({ap})" for a, ap in APROBADORES.items() if a not in jefes]
 if no_encontrados:
@@ -272,16 +366,16 @@ areas_sin_jefe = sorted(set(personal["area"].dropna()) - set(jefes))
 if areas_sin_jefe:
     st.caption("Áreas sin jefe asignado (las apruebas tú): " + ", ".join(bonito(a) for a in areas_sin_jefe) + ".")
 
-st.subheader("Requieren gerencia")
+st.markdown('<div class="a-cab" style="margin-top:14px"><b>Requieren gerencia</b></div>', unsafe_allow_html=True)
 tarjetas(sols[sols["estado"] == "PENDIENTE_GERENCIA"], "g_")
 
-st.subheader("Jefaturas y áreas sin jefe")
+st.markdown('<div class="a-cab" style="margin-top:14px"><b>Jefaturas y áreas sin jefe</b></div>', unsafe_allow_html=True)
 pend = sols[sols["estado"] == "PENDIENTE"]
 tarjetas(pend[(~pend["area"].isin(list(jefes))) | (pend["cod"].isin(cods_jefes))], "a_")
 
 directo = (~tele_pend["area"].isin(list(jefes))) | (tele_pend["cod"].isin(cods_jefes))
 if directo.any():
-    st.subheader("Teletrabajo: jefaturas y áreas sin jefe")
+    st.markdown('<div class="a-cab" style="margin-top:14px"><b>Teletrabajo: jefaturas y áreas sin jefe</b></div>', unsafe_allow_html=True)
     tarjetas_tele(tele_pend[directo], "a_")
 
 with st.expander("Pendientes que corresponden a cada jefe"):
