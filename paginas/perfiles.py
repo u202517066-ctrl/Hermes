@@ -20,7 +20,7 @@ if sesion.get("rol") != "admin":
 def respaldo_excel():
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as w:
-        for t in db.TABLAS:
+        for t in [t for t in db.TABLAS if t != "sesiones"]:
             # los documentos de las facturas no caben en un Excel: solo se listan
             sql = "SELECT id, factura_id, nombre, tipo FROM facturas_archivos" if t == "facturas_archivos" \
                 else f"SELECT * FROM {t}"
