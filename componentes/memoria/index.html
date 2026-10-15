@@ -1,0 +1,31 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"></head>
+<body style="margin:0">
+<script>
+// Componente invisible de HERMES: guarda, lee o borra la llave de sesión en el navegador
+// y le devuelve el valor a la app (protocolo de componentes de Streamlit, sin librerías).
+var CLAVE = "hermes_sesion";
+function enviar(tipo, datos) {
+  var m = { isStreamlitMessage: true, type: tipo };
+  for (var k in datos) { m[k] = datos[k]; }
+  window.parent.postMessage(m, "*");
+}
+window.addEventListener("message", function (ev) {
+  var d = ev.data;
+  if (!d || d.type !== "streamlit:render") { return; }
+  var a = d.args || {};
+  var valor = "";
+  try {
+    if (a.accion === "guardar") { window.localStorage.setItem(CLAVE, a.valor || ""); valor = a.valor || ""; }
+    else if (a.accion === "borrar") { window.localStorage.removeItem(CLAVE); valor = ""; }
+    else { valor = window.localStorage.getItem(CLAVE) || ""; }
+  } catch (e) { valor = ""; }
+  enviar("streamlit:setComponentValue", { value: valor, dataType: "json" });
+  enviar("streamlit:setFrameHeight", { height: 0 });
+});
+enviar("streamlit:componentReady", { apiVersion: 1 });
+enviar("streamlit:setFrameHeight", { height: 0 });
+</script>
+</body>
+</html>
