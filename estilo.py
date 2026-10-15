@@ -34,7 +34,11 @@ div[data-testid="stVerticalBlockBorderWrapper"] { border-radius: 14px; }
 
 /* Barra superior de Streamlit: sin botones de desarrollo */
 header[data-testid="stHeader"] { background: transparent; }
-[data-testid="stToolbar"], [data-testid="stAppDeployButton"], [data-testid="stDecoration"] { display: none !important; }
+/* Se ocultan solo los botones de desarrollo; el botón del menú (☰) debe quedar visible en el celular */
+[data-testid="stToolbarActions"], [data-testid="stAppDeployButton"], [data-testid="stMainMenu"],
+[data-testid="stDecoration"] { display: none !important; }
+[data-testid="stExpandSidebarButton"] { visibility: visible !important; }
+[data-testid="stExpandSidebarButton"]::after { content: "Menú"; margin-left: 4px; font-weight: 700; color: var(--h-azul); }
 [data-testid="stMainBlockContainer"] { padding-top: 2.2rem; }
 
 /* Menú lateral como en el diseño */
