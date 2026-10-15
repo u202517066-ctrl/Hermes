@@ -78,20 +78,24 @@ if st.session_state.get("pf_crear"):
             nuevo_apellido = c2.text_input("Apellido")
             c3, c4 = st.columns(2)
             nuevo_usuario = c3.text_input("Correo o usuario")
-            nuevo_rol = c4.selectbox("Rol", ROLES, index=ROLES.index("aprobador_facturas"), format_func=NOMBRE_ROL.get)
+            nuevo_rol = c4.multiselect("Roles", ROLES, default=["aprobador_facturas"], format_func=NOMBRE_ROL.get,
+                                       help="Puedes marcar más de uno")
             c5, c6 = st.columns(2)
             clave1 = c5.text_input("Contraseña (mínimo 6 caracteres)", type="password")
             clave2 = c6.text_input("Repite la contraseña", type="password")
             if st.form_submit_button("Crear usuario", type="primary"):
                 if not nuevo_usuario.strip() or not nuevo_nombre.strip():
                     st.error("Completa nombre y correo o usuario.")
+                elif not nuevo_rol:
+                    st.error("Elige al menos un rol.")
                 elif len(clave1) < 6 or clave1 != clave2:
                     st.error("La contraseña debe tener al menos 6 caracteres y coincidir en ambos campos.")
                 else:
                     try:
                         seg.crear_usuario(nuevo_usuario, clave1, nuevo_rol, None, nuevo_nombre.strip(),
                                           nuevo_apellido.strip() or None, "ACTIVO")
-                        st.success(f"Usuario {nuevo_usuario.strip().lower()} creado como {NOMBRE_ROL[nuevo_rol].lower()}.")
+                        st.success(f"Usuario {nuevo_usuario.strip().lower()} creado como "
+                                   f"{' y '.join(NOMBRE_ROL[r].lower() for r in nuevo_rol)}.")
                     except db.IntegrityError:
                         st.error("Ese correo o usuario ya existe.")
 
@@ -109,8 +113,11 @@ for u in pend.to_dict("records"):
                     unsafe_allow_html=True)
         c1, c2, c3, c4 = st.columns([3.2, 1.6, 1, 1], vertical_alignment="bottom")
         persona = c1.selectbox("Persona en el personal", list(opciones.keys()), index=indice(u["cod"]), key=f"p_{u['usuario']}")
-        rol = c2.selectbox("Rol", ROLES, key=f"r_{u['usuario']}", format_func=NOMBRE_ROL.get)
+        rol = c2.multiselect("Roles", ROLES, default=["colaborador"], key=f"r_{u['usuario']}", format_func=NOMBRE_ROL.get)
         if c3.button("Aprobar", key=f"a_{u['usuario']}", type="primary", use_container_width=True):
+            if not rol:
+                st.error("Elige al menos un rol.")
+                st.stop()
             try:
                 seg.actualizar_usuario(u["usuario"], rol, opciones[persona], "ACTIVO")
                 st.rerun()
@@ -128,7 +135,7 @@ with izq:
     tabla = pd.DataFrame({
         "Nombre": [nombre_usuario(u) for u in activos.to_dict("records")],
         "Usuario": activos["usuario"],
-        "Rol": activos["rol"].map(lambda r: NOMBRE_ROL.get(r, r)),
+        "Roles": activos["rol"].map(lambda r: ", ".join(NOMBRE_ROL.get(x, x) for x in seg.roles_de(r))),
         "Persona en el personal": activos["cod"].map(lambda c: estilo.bonito(nombre_de[c]) if c in nombre_de else "Sin asociar"),
     })
     ev = st.dataframe(tabla, hide_index=True, width="stretch", on_select="rerun", selection_mode="single-row",
@@ -147,10 +154,12 @@ with der:
             st.markdown(f'<div class="pf-quien"><span class="h-iniciales">{html.escape(estilo.iniciales(nom))}</span>'
                         f'<div><b>{html.escape(nom)}</b><small>{html.escape(sel)}</small></div></div>', unsafe_allow_html=True)
             persona = st.selectbox("Persona en el personal", list(opciones.keys()), index=indice(u["cod"]), key=f"ep_{sel}")
-            rol = st.selectbox("Rol", ROLES, index=ROLES.index(u["rol"]) if u["rol"] in ROLES else 0, key=f"er_{sel}",
-                               format_func=NOMBRE_ROL.get)
+            rol = st.multiselect("Roles", ROLES, default=seg.roles_de(u["rol"]), key=f"er_{sel}",
+                                 format_func=NOMBRE_ROL.get, help="Puedes marcar más de uno")
             if st.button("Guardar cambios", type="primary", use_container_width=True, key=f"eg_{sel}"):
-                if sel == sesion.get("usuario") and rol != "admin":
+                if not rol:
+                    st.error("Elige al menos un rol.")
+                elif sel == sesion.get("usuario") and "admin" not in rol:
                     st.error("No puedes quitarte a ti mismo el rol de administrador.")
                 else:
                     try:

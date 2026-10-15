@@ -42,7 +42,10 @@ NO_PAGADAS = ("PENDIENTE", "APROBADA", "OBSERVADA")
 
 st.title("Facturas de proveedores")
 sesion = st.session_state.get("sesion", {})
-rol = sesion.get("rol")
+roles = set(sesion.get("roles") or [sesion.get("rol")])
+# Vista de administrador si es admin; si no, vista de aprobador (aunque además sea jefe o colaborador)
+rol = "admin" if "admin" in roles else "aprobador_facturas" if "aprobador_facturas" in roles else None
+puede_aprobar = "aprobador_facturas" in roles
 if rol not in ("admin", "aprobador_facturas"):
     st.error("Solo el administrador y el aprobador de facturas pueden ver esta página.")
     st.stop()
@@ -564,7 +567,7 @@ def ficha(f):
         if estado == "OBSERVADA" and f["motivo_observacion"]:
             st.warning(f"Observación de {f['aprobado_por']}: {f['motivo_observacion']}")
 
-        if rol == "aprobador_facturas":
+        if rol == "aprobador_facturas" or (puede_aprobar and estado == "PENDIENTE"):
             if estado == "PENDIENTE":
                 motivo = st.text_input("Motivo (solo si vas a observar)", key=f"mot_{fid}")
                 b1, b2 = st.columns(2)
@@ -575,7 +578,9 @@ def ficha(f):
                         st.error("Escribe el motivo para que el administrador pueda corregirla.")
                     else:
                         observar([fid], motivo.strip())
-            return
+            if rol == "aprobador_facturas":
+                return
+            st.divider()
 
         if estado == "APROBADA":
             fp = st.date_input("Fecha de pago", value=hoy, format="DD/MM/YYYY", key=f"fp_{fid}")
