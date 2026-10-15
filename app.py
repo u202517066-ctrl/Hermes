@@ -1,7 +1,6 @@
 import streamlit as st
 
 import html
-import json
 from pathlib import Path
 
 import streamlit.components.v1 as components
@@ -61,25 +60,16 @@ div[data-testid="stForm"] { background: transparent !important; border: 0 !impor
 </style>"""
 
 
-COOKIE = "hermes_sesion"
+# Componente propio (componentes/memoria) que guarda la llave de sesión en el navegador
+_memoria = components.declare_component("hermes_memoria", path=str(CARPETA / "componentes" / "memoria"))
 
 
-def escribir_cookie(valor, dias):
-    """Guarda (o borra, con dias=0) la llave en el navegador. Se ejecuta con un componente invisible."""
-    components.html(
-        f"""<script>
-const seguro = window.parent.location.protocol === "https:" ? "; Secure" : "";
-window.parent.document.cookie = "{COOKIE}=" + {json.dumps(valor)} + "; max-age={dias * 86400}; path=/; SameSite=Lax" + seguro;
-</script>""",
-        height=0,
-    )
-
-
-def leer_cookie():
+def memoria(accion, valor="", clave="mem"):
+    """accion: 'leer' (devuelve la llave guardada, '' si no hay, None mientras carga), 'guardar' o 'borrar'."""
     try:
-        return st.context.cookies.get(COOKIE)
-    except Exception:  # versiones de Streamlit sin st.context.cookies
-        return None
+        return _memoria(accion=accion, valor=valor, key=clave, default=None)
+    except Exception:
+        return ""
 
 
 def pantalla_acceso():
@@ -154,14 +144,15 @@ def pantalla_acceso():
 
 sesion = st.session_state.get("sesion")
 # Al recargar la página: si el navegador tiene una llave válida, se entra sin pedir la contraseña
-if not sesion and not st.session_state.get("cookie_borrar"):
-    token = leer_cookie()
-    datos = seg.usuario_de_sesion(token)
+if st.session_state.get("cookie_borrar"):
+    if memoria("borrar", clave="mem_borrar") is not None:  # ya se borró en el navegador
+        st.session_state.pop("cookie_borrar", None)
+elif not sesion:
+    token = memoria("leer", clave="mem_leer")
+    datos = seg.usuario_de_sesion(token) if token else None
     if datos:
         st.session_state["sesion"] = sesion = datos
         st.session_state["cookie_actual"] = token
-if st.session_state.pop("cookie_borrar", False):
-    escribir_cookie("", 0)
 if not sesion:
     # La pantalla de ingreso se muestra como única página y sin menú, para que no quede
     # a la vista el menú de la sesión anterior al cerrar sesión.
@@ -194,7 +185,8 @@ nombre_mostrar = (estilo.bonito(ficha.nombre) if ficha else
 sesion["nombre"] = nombre_mostrar
 if "cookie_nueva" in st.session_state:  # recién ingresó con "Mantener mi sesión iniciada"
     st.session_state["cookie_actual"] = st.session_state["cookie_nueva"]
-    escribir_cookie(st.session_state.pop("cookie_nueva"), seg.DIAS_SESION)
+    if memoria("guardar", st.session_state["cookie_nueva"], clave="mem_guardar") is not None:
+        st.session_state.pop("cookie_nueva", None)
 detalle = estilo.bonito(ficha.puesto) if ficha and ficha.puesto else " y ".join(NOMBRE_ROL.get(r, r) for r in roles)
 
 # Logo del menú: si falta la carpeta assets, la app sigue funcionando sin él
@@ -206,7 +198,7 @@ if logo.exists():
 def pie_menu():
     estilo.tarjeta_usuario(nombre_mostrar, detalle)
     if st.sidebar.button("Cerrar sesión", icon=":material/logout:", type="tertiary"):
-        seg.cerrar_sesion(token=st.session_state.pop("cookie_actual", None) or leer_cookie())
+        seg.cerrar_sesion(token=st.session_state.pop("cookie_actual", None))
         st.session_state.pop("sesion", None)
         st.session_state["cookie_borrar"] = True
         st.rerun()
