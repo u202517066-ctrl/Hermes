@@ -5,6 +5,7 @@ from datetime import date, timedelta
 import pandas as pd
 import streamlit as st
 
+import correo
 import db
 from reglas_vacaciones import (
     APROBADORES, DIAS_BLOQUE, MESES_CICLO,
@@ -301,3 +302,95 @@ with st.expander("Todas las solicitudes"):
         )[["Colaborador", "Área", "Desde", "Hasta", "dias", "Estado", "Respondió"]].rename(columns={"dias": "Días"}),
         width="stretch", hide_index=True,
     )
+
+
+# ---------- Enviar vacaciones por correo ----------
+def excel_vacaciones(df):
+    import io
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Font, PatternFill
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Vacaciones"
+    cols = ["Colaborador", "Puesto", "Área", "Desde", "Hasta", "Días", "Estado", "Respondió"]
+    for i, (t, ancho) in enumerate(zip(cols, [34, 26, 34, 12, 12, 7, 20, 30]), start=1):
+        c = ws.cell(row=1, column=i, value=t)
+        c.font, c.fill = Font(bold=True, color="FFFFFF"), PatternFill("solid", start_color="0B4F9C")
+        c.alignment = Alignment(horizontal="center")
+        ws.column_dimensions[c.column_letter].width = ancho
+    for f, r in enumerate(df.itertuples(), start=2):
+        valores = [bonito(r.nombre), bonito(r.puesto), bonito(r.area), date.fromisoformat(r.inicio),
+                   date.fromisoformat(r.fin), int(r.dias), ESTADOS.get(r.estado, r.estado),
+                   bonito(r.resuelto_por) if isinstance(r.resuelto_por, str) and r.resuelto_por else ""]
+        for col, v in enumerate(valores, start=1):
+            c = ws.cell(row=f, column=col, value=v)
+            if col in (4, 5):
+                c.number_format = "dd/mm/yyyy"
+    ws.freeze_panes = "A2"
+    if len(df):
+        ws.auto_filter.ref = f"A1:H{len(df) + 1}"
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+def html_vacaciones(df, titulo):
+    celda = "padding:6px 10px;border-bottom:1px solid #D5E2F3;text-align:left"
+    resumen = df["estado"].map(ESTADOS).value_counts()
+    chips = " &nbsp;·&nbsp; ".join(f"<b>{n}</b> {html.escape(e.lower())}" for e, n in resumen.items())
+
+    def td(v, derecha=False):
+        return f"<td style='{celda}{';text-align:right' if derecha else ''}'>{html.escape(str(v))}</td>"
+
+    filas = "".join(
+        "<tr>" + td(bonito(r.nombre)) + td(bonito(r.area)) + td(fecha(r.inicio)) + td(fecha(r.fin))
+        + td(int(r.dias), derecha=True) + td(ESTADOS.get(r.estado, r.estado)) + "</tr>"
+        for r in df.head(300).itertuples())
+    cabecera = "".join(f"<th style='{celda}'>{t}</th>" for t in ("Colaborador", "Área", "Desde", "Hasta", "Días", "Estado"))
+    extra = f"<p>Se muestran 300 de {len(df)}; el resto está en el Excel adjunto.</p>" if len(df) > 300 else ""
+    return f"""<div style="font-family:Segoe UI,Arial,sans-serif;color:#14294B">
+<h2 style="color:#0B4F9C;margin:0 0 4px">{html.escape(titulo)}</h2>
+<p style="margin:0 0 12px;color:#4A5D7E">{len(df)} solicitudes: {chips}</p>
+<table style="border-collapse:collapse;font-size:13px">
+<tr style="background:#0B4F9C;color:#FFFFFF">{cabecera}</tr>
+{filas}
+</table>{extra}
+<p style="color:#6A7C99;font-size:12px">Enviado desde HERMES el {hoy:%d/%m/%Y}. El detalle completo va en el Excel adjunto.</p>
+</div>"""
+
+
+with st.expander("Enviar vacaciones por correo"):
+    c1, c2 = st.columns([2, 1])
+    alcance = c1.radio("¿Qué vacaciones?", ["Próximas (de hoy en adelante)", "Todas"], horizontal=True,
+                       key="mail_alcance")
+    con_rechazadas = c2.checkbox("Incluir rechazadas", value=False, key="mail_rech")
+    envio = sols.copy()
+    if alcance.startswith("Próximas"):
+        envio = envio[envio["fin"] >= hoy.isoformat()]
+    if not con_rechazadas:
+        envio = envio[envio["estado"] != "RECHAZADA"]
+    envio = envio.sort_values(["inicio", "nombre"])
+    st.caption(f"Se enviarán {len(envio)} solicitudes, con el Excel adjunto.")
+
+    destino = st.text_input("Enviar a (puedes poner varios, separados por coma)",
+                            value=correo.destino_por_defecto(), key="mail_destino")
+    archivo_excel = excel_vacaciones(envio)
+    nombre_excel = f"vacaciones_{hoy:%Y-%m-%d}.xlsx"
+    b1, b2 = st.columns(2)
+    if not correo.configurado():
+        st.info("Para enviar correos falta configurar la cuenta de Outlook en los secrets "
+                "(SMTP_USUARIO y SMTP_CLAVE). Mientras tanto, puedes descargar el Excel.")
+    if b1.button("Enviar correo", type="primary", disabled=envio.empty or not correo.configurado()):
+        with st.spinner("Enviando..."):
+            titulo = ("Vacaciones programadas" if alcance.startswith("Próximas") else "Todas las vacaciones") \
+                     + f" al {hoy:%d/%m/%Y}"
+            error = correo.enviar(destino, f"HERMES · {titulo}", html_vacaciones(envio, titulo),
+                                  [(nombre_excel, archivo_excel,
+                                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")])
+        if error:
+            st.error(error)
+        else:
+            st.success(f"Correo enviado a {destino}.")
+    b2.download_button("Descargar el Excel", data=archivo_excel, file_name=nombre_excel,
+                       mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                       disabled=envio.empty, key="mail_excel")
