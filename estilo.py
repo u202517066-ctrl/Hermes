@@ -32,6 +32,48 @@ section[data-testid="stSidebar"] { background: var(--h-superficie); border-right
 div[data-testid="stExpander"] details, div[data-testid="stForm"] { border-radius: 14px; background: var(--h-superficie); }
 div[data-testid="stVerticalBlockBorderWrapper"] { border-radius: 14px; }
 
+/* Barra superior de Streamlit: sin botones de desarrollo */
+header[data-testid="stHeader"] { background: transparent; }
+[data-testid="stToolbar"], [data-testid="stAppDeployButton"], [data-testid="stDecoration"] { display: none !important; }
+[data-testid="stMainBlockContainer"] { padding-top: 2.2rem; }
+
+/* Menú lateral como en el diseño */
+[data-testid="stNavSectionHeader"] { color: var(--h-suave); font-size: 0.8rem; font-weight: 600; }
+[data-testid="stSidebarNavLink"] { border-radius: 10px; }
+
+/* Botones */
+button[data-testid="stBaseButton-primary"], button[data-testid="stBaseButton-primaryFormSubmit"] {
+  background: var(--h-azul) !important; border: 1px solid var(--h-azul) !important; color: #FFFFFF !important; }
+button[data-testid="stBaseButton-primary"]:hover, button[data-testid="stBaseButton-primaryFormSubmit"]:hover {
+  background: var(--h-azul-hondo) !important; }
+button[data-testid="stBaseButton-secondary"], button[data-testid="stBaseButton-secondaryFormSubmit"] {
+  background: var(--h-superficie); border: 1px solid var(--h-linea); color: var(--h-tinta); }
+button[data-testid="stBaseButton-tertiary"] p { color: var(--h-azul); font-weight: 700; }
+
+/* Campos de texto, fechas, números y listas */
+[data-baseweb="input"], [data-baseweb="select"] > div, [data-baseweb="textarea"] {
+  border-radius: 10px !important; background: var(--h-fondo) !important; border: 1px solid var(--h-linea) !important; }
+[data-baseweb="input"] input, [data-baseweb="input"] > div, [data-baseweb="textarea"] textarea { background: transparent !important; }
+
+/* Pestañas como pastillas */
+[data-baseweb="tab-list"] { gap: 6px; }
+[data-baseweb="tab"] { border: 1px solid var(--h-linea) !important; border-radius: 999px !important;
+  padding: 6px 16px !important; background: var(--h-superficie) !important; height: auto !important; }
+[data-baseweb="tab"][aria-selected="true"] { background: var(--h-azul) !important; border-color: var(--h-azul) !important; }
+[data-baseweb="tab"][aria-selected="true"] p { color: #FFFFFF !important; }
+[data-baseweb="tab-highlight"], [data-baseweb="tab-border"] { display: none !important; }
+
+/* Enlaces a otras pantallas como botón */
+[data-testid="stPageLink"] a { border: 1px solid var(--h-linea); border-radius: 10px; padding: 6px 14px;
+  background: var(--h-superficie); display: inline-flex; }
+[data-testid="stPageLink"] a span { color: var(--h-azul); font-weight: 700; }
+
+/* Indicadores, tablas y paneles */
+[data-testid="stMetric"] { background: var(--h-superficie); border: 1px solid var(--h-linea); border-radius: 14px; padding: 14px 16px; }
+[data-testid="stDataFrame"], [data-testid="stDataEditor"] { border-radius: 12px; overflow: hidden; }
+.h-panel table, .h-panel th, .h-panel td { border: none !important; }
+.h-panel table { margin: 0; }
+
 /* Piezas comunes */
 .h-sub { color: var(--h-suave); margin: -0.6rem 0 1.2rem; }
 .h-panel { background: var(--h-superficie); border: 1px solid var(--h-linea); border-radius: 14px; padding: 18px 20px; }
@@ -43,7 +85,7 @@ div[data-testid="stVerticalBlockBorderWrapper"] { border-radius: 14px; }
 .h-estado.info { background: var(--h-celeste); color: var(--h-azul); }
 
 /* Tarjeta de usuario en el menú */
-.h-usuario { display: flex; gap: 10px; align-items: center; padding: 10px 4px 4px; border-top: 1px solid var(--h-linea); }
+.h-usuario { display: flex; gap: 10px; align-items: center; padding: 4px 4px 4px; }
 .h-iniciales { width: 36px; height: 36px; border-radius: 50%; display: grid; place-items: center; flex: none;
   background: var(--h-azul); color: #FFFFFF; font-weight: 700; font-size: 0.85rem; }
 .h-usuario b { display: block; line-height: 1.2; color: var(--h-tinta); }

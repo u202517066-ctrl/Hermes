@@ -38,22 +38,30 @@ RUTA_SVG = """<svg viewBox="0 0 600 320" preserveAspectRatio="none" aria-hidden=
 
 CSS_ACCESO = """<style>
 section[data-testid="stSidebar"], [data-testid="stSidebarCollapsedControl"] { display: none; }
-.block-container { padding-top: 3rem; max-width: 1080px; }
+.block-container, [data-testid="stMainBlockContainer"] { padding-top: 3rem; max-width: 1080px; }
+div[data-testid="stForm"] { background: transparent !important; border: 0 !important; padding: 0 !important; }
+.st-key-acceso { background: var(--h-superficie); border: 1px solid var(--h-linea); border-radius: 18px; overflow: hidden; }
+.st-key-acceso > div > [data-testid="stHorizontalBlock"] { gap: 0 !important; }
+.st-key-acceso_form { padding: 6px 44px 30px; }
+.st-key-acceso .h-acceso-marca { border-radius: 0; min-height: 620px; }
+.stApp .h-acceso-titulo { font-size: 1.8rem; }
 .h-acceso-marca { background: #083A75; color: #FFFFFF; border-radius: 18px; padding: 40px; min-height: 520px;
   position: relative; overflow: hidden; display: flex; flex-direction: column; }
 .h-acceso-marca .logo { font-stretch: 75%; font-weight: 800; font-size: 3.2rem; letter-spacing: 0.03em; line-height: 1; }
 .h-acceso-marca p { font-size: 1.12rem; max-width: 30ch; margin: 16px 0 0; opacity: 0.92; color: #FFFFFF; }
 .h-acceso-marca footer { margin-top: auto; position: relative; font-size: 0.85rem; opacity: 0.75; }
 .h-ruta { position: absolute; left: 0; right: 0; bottom: 0; width: 100%; height: 52%; }
-.h-acceso-titulo { font-size: 1.7rem; font-weight: 700; margin: 2.2rem 0 0.2rem; color: var(--h-tinta); }
+.h-acceso-titulo { font-size: 1.7rem; font-weight: 700; margin: 3.2rem 0 0.2rem; color: var(--h-tinta); }
 .h-acceso-sub { color: var(--h-suave); margin-bottom: 1.2rem; }
-@media (max-width: 760px) { .h-acceso-marca { min-height: 220px; } .h-acceso-titulo { margin-top: 0.5rem; } }
+@media (max-width: 760px) { .st-key-acceso .h-acceso-marca { min-height: 220px; } .h-acceso-titulo { margin-top: 0.5rem; }
+  .st-key-acceso_form { padding: 6px 20px 24px; } }
 </style>"""
 
 
 def pantalla_acceso():
     st.markdown(CSS_ACCESO, unsafe_allow_html=True)
-    izq, der = st.columns([1.05, 1], gap="large")
+    tarjeta = st.container(key="acceso")
+    izq, der = tarjeta.columns([1.05, 1], gap="small")
     with izq:
         st.markdown(
             f"""<div class="h-acceso-marca"><div class="logo">HERMES</div>
@@ -61,7 +69,7 @@ def pantalla_acceso():
 {RUTA_SVG}<footer>Hermes Transportes Blindados</footer></div>""",
             unsafe_allow_html=True,
         )
-    with der:
+    with der, st.container(key="acceso_form"):
         if st.session_state.get("acceso_modo") != "registro":
             st.markdown('<div class="h-acceso-titulo">Ingresa a tu cuenta</div>'
                         '<div class="h-acceso-sub">Usa el correo con el que te registraste.</div>',
@@ -145,7 +153,10 @@ nombre_mostrar = (estilo.bonito(ficha.nombre) if ficha else
 sesion["nombre"] = nombre_mostrar
 detalle = estilo.bonito(ficha.puesto) if ficha and ficha.puesto else NOMBRE_ROL.get(rol, rol)
 
-st.logo(str(CARPETA / "assets" / "logo.svg"), size="large", icon_image=str(CARPETA / "assets" / "icono.svg"))
+# Logo del menú: si falta la carpeta assets, la app sigue funcionando sin él
+logo, icono = CARPETA / "assets" / "logo.svg", CARPETA / "assets" / "icono.svg"
+if logo.exists():
+    st.logo(str(logo), size="large", icon_image=str(icono) if icono.exists() else None)
 
 
 def pie_menu():
