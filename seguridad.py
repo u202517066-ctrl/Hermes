@@ -7,6 +7,25 @@ import unicodedata
 import db
 
 
+ROLES = ["colaborador", "jefe", "admin", "aprobador_facturas"]
+PRIORIDAD = ["admin", "jefe", "colaborador", "aprobador_facturas"]  # el primero que tenga es su rol principal
+
+
+def roles_de(texto):
+    """'jefe,aprobador_facturas' -> ['jefe', 'aprobador_facturas'] (en el orden de ROLES)."""
+    marcados = {r.strip() for r in str(texto or "").split(",") if r.strip()}
+    return [r for r in ROLES if r in marcados] or ["colaborador"]
+
+
+def texto_roles(roles):
+    roles = [r for r in ROLES if r in set(roles)]
+    return ",".join(roles) or "colaborador"
+
+
+def rol_principal(roles):
+    return next((r for r in PRIORIDAD if r in set(roles)), "colaborador")
+
+
 def crear_tabla():
     db.crear_tablas()
 
@@ -22,7 +41,8 @@ def crear_usuario(usuario, clave, rol, cod=None, nombre=None, apellido=None, est
         "VALUES (:usuario, :sal, :clave, :rol, :cod, :nombre, :apellido, :estado)",
         {
             "usuario": usuario.strip().lower(), "sal": sal, "clave": _hash(clave, sal),
-            "rol": rol, "cod": cod, "nombre": nombre, "apellido": apellido, "estado": estado,
+            "rol": texto_roles(rol if isinstance(rol, (list, tuple, set)) else roles_de(rol)), "cod": cod,
+            "nombre": nombre, "apellido": apellido, "estado": estado,
         },
     )
 
@@ -89,7 +109,8 @@ def registrar(nombre, apellido, correo, clave):
 def actualizar_usuario(usuario, rol, cod, estado="ACTIVO"):
     db.ejecutar(
         "UPDATE usuarios SET rol = :rol, cod = :cod, estado = :estado WHERE usuario = :usuario",
-        {"rol": rol, "cod": cod, "estado": estado, "usuario": usuario},
+        {"rol": texto_roles(rol if isinstance(rol, (list, tuple, set)) else roles_de(rol)), "cod": cod,
+         "estado": estado, "usuario": usuario},
     )
 
 
