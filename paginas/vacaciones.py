@@ -105,15 +105,19 @@ def validar(p, ingreso, ini, fin, es_admin):
     if max_simultaneos(propias, ini, fin) > 0:
         errores.append("Ya tienes vacaciones registradas que se cruzan con esas fechas.")
 
-    if es_retail(p):
-        otros = activas[(activas["cod"] != p["cod"]) & activas.apply(es_retail, axis=1)] if not activas.empty \
-            else activas
-        # Grupos: máximo 1 persona del grupo de vacaciones a la vez
-        if str(p["seccion"]).upper().startswith("GRUPO"):
-            grupo = otros[otros["seccion"] == p["seccion"]]
-            if max_simultaneos(grupo, ini, fin) >= TOPE_POR_GRUPO:
-                errores.append("Alguien de tu grupo ya tiene vacaciones en esas fechas. Prueba con otras.")
-        # Ejecutivos de servicios: máximo 2 en el mismo mes, en fechas que no se crucen
+    # Restricciones solo para retail y solo para quienes están en un grupo (GRUPO_1, GRUPO_2, GRUPO_3).
+    # Las demás áreas, y quienes de retail no están en un grupo, toman vacaciones libremente.
+    def en_grupo(fila):
+        return es_retail(fila) and str(fila.get("seccion", "")).upper().startswith("GRUPO")
+
+    if en_grupo(p):
+        otros = activas[activas["cod"] != p["cod"]]
+        otros = otros[otros.apply(en_grupo, axis=1)] if not otros.empty else otros
+        # De cada grupo sale solo 1 persona a la vez
+        grupo = otros[otros["seccion"] == p["seccion"]]
+        if max_simultaneos(grupo, ini, fin) >= TOPE_POR_GRUPO:
+            errores.append("Alguien de tu grupo ya tiene vacaciones en esas fechas. Prueba con otras.")
+        # Ejecutivos de servicios de los grupos: máximo 2 en el mismo mes, sin coincidir
         if str(p["puesto"]).upper() == "EJECUTIVO DE SERVICIOS":
             ejec = otros[otros["puesto"].str.upper() == "EJECUTIVO DE SERVICIOS"]
             if max_simultaneos(ejec, ini, fin) > 0:
