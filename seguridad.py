@@ -114,7 +114,50 @@ def actualizar_usuario(usuario, rol, cod, estado="ACTIVO"):
     )
 
 
+# ---------- Mantener la sesión iniciada ----------
+DIAS_SESION = 14
+
+
+def _huella(token):
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def crear_sesion(usuario):
+    """Crea una llave temporal para recordar el ingreso en este navegador. Devuelve la llave (solo se guarda su huella)."""
+    import secrets
+    from datetime import timedelta
+    token = secrets.token_urlsafe(32)
+    expira = (db.hoy() + timedelta(days=DIAS_SESION)).isoformat()
+    db.ejecutar("DELETE FROM sesiones WHERE expira < :h", {"h": db.hoy().isoformat()})
+    db.ejecutar("INSERT INTO sesiones (token, usuario, expira, creado) VALUES (:t, :u, :e, :c)",
+                {"t": _huella(token), "u": usuario, "e": expira, "c": db.ahora()})
+    return token
+
+
+def usuario_de_sesion(token):
+    """Devuelve los datos de ingreso si la llave es válida y el usuario sigue activo; si no, None."""
+    if not token:
+        return None
+    fila = db.uno("SELECT usuario FROM sesiones WHERE token = :t AND expira >= :h",
+                  {"t": _huella(token), "h": db.hoy().isoformat()})
+    if not fila:
+        return None
+    u = datos_usuario(fila.usuario)
+    if not u or u["estado"] != "ACTIVO":
+        return None
+    return {"usuario": u["usuario"], "rol": u["rol"], "cod": u["cod"]}
+
+
+def cerrar_sesion(token=None, usuario=None):
+    """Invalida una llave, o todas las de un usuario."""
+    if token:
+        db.ejecutar("DELETE FROM sesiones WHERE token = :t", {"t": _huella(token)})
+    if usuario:
+        db.ejecutar("DELETE FROM sesiones WHERE usuario = :u", {"u": usuario})
+
+
 def cambiar_clave(usuario, clave):
+    cerrar_sesion(usuario=usuario)  # al cambiar la contraseña se cierran las sesiones recordadas
     sal = os.urandom(16).hex()
     db.ejecutar(
         "UPDATE usuarios SET sal = :sal, clave = :clave WHERE usuario = :usuario",
@@ -123,4 +166,5 @@ def cambiar_clave(usuario, clave):
 
 
 def eliminar_usuario(usuario):
+    cerrar_sesion(usuario=usuario)
     db.ejecutar("DELETE FROM usuarios WHERE usuario = :u", {"u": usuario})

@@ -1,7 +1,10 @@
 import streamlit as st
 
 import html
+import json
 from pathlib import Path
+
+import streamlit.components.v1 as components
 
 import db
 import estilo
@@ -58,6 +61,27 @@ div[data-testid="stForm"] { background: transparent !important; border: 0 !impor
 </style>"""
 
 
+COOKIE = "hermes_sesion"
+
+
+def escribir_cookie(valor, dias):
+    """Guarda (o borra, con dias=0) la llave en el navegador. Se ejecuta con un componente invisible."""
+    components.html(
+        f"""<script>
+const seguro = window.parent.location.protocol === "https:" ? "; Secure" : "";
+window.parent.document.cookie = "{COOKIE}=" + {json.dumps(valor)} + "; max-age={dias * 86400}; path=/; SameSite=Lax" + seguro;
+</script>""",
+        height=0,
+    )
+
+
+def leer_cookie():
+    try:
+        return st.context.cookies.get(COOKIE)
+    except Exception:  # versiones de Streamlit sin st.context.cookies
+        return None
+
+
 def pantalla_acceso():
     st.markdown(CSS_ACCESO, unsafe_allow_html=True)
     tarjeta = st.container(key="acceso")
@@ -78,6 +102,9 @@ def pantalla_acceso():
             with st.form("login", border=False):
                 u = st.text_input("Correo o usuario", key="login_u", placeholder="nombre@hermes.com.pe")
                 c = st.text_input("Contraseña", type="password", key="login_c")
+                recordar = st.checkbox("Mantener mi sesión iniciada", value=True,
+                                       help="No tendrás que volver a ingresar al recargar la página, durante 14 días. "
+                                            "Desmárcalo en computadoras compartidas.")
                 entrar = st.form_submit_button("Ingresar", type="primary", use_container_width=True)
             st.caption("También puedes presionar Enter para ingresar.")
             if entrar:
@@ -86,6 +113,8 @@ def pantalla_acceso():
                     st.warning(datos["error"])
                 elif datos:
                     st.session_state["sesion"] = datos
+                    if recordar:
+                        st.session_state["cookie_nueva"] = seg.crear_sesion(datos["usuario"])
                     st.rerun()
                 else:
                     st.error("Usuario o contraseña incorrectos.")
@@ -124,6 +153,15 @@ def pantalla_acceso():
 
 
 sesion = st.session_state.get("sesion")
+# Al recargar la página: si el navegador tiene una llave válida, se entra sin pedir la contraseña
+if not sesion and not st.session_state.get("cookie_borrar"):
+    token = leer_cookie()
+    datos = seg.usuario_de_sesion(token)
+    if datos:
+        st.session_state["sesion"] = sesion = datos
+        st.session_state["cookie_actual"] = token
+if st.session_state.pop("cookie_borrar", False):
+    escribir_cookie("", 0)
 if not sesion:
     # La pantalla de ingreso se muestra como única página y sin menú, para que no quede
     # a la vista el menú de la sesión anterior al cerrar sesión.
@@ -154,6 +192,9 @@ ficha = db.uno("SELECT nombre, puesto FROM rrhh_personal WHERE cod = :c", {"c": 
 nombre_mostrar = (estilo.bonito(ficha.nombre) if ficha else
                   " ".join(x for x in (actual.get("nombre"), actual.get("apellido")) if x) or sesion["usuario"])
 sesion["nombre"] = nombre_mostrar
+if "cookie_nueva" in st.session_state:  # recién ingresó con "Mantener mi sesión iniciada"
+    st.session_state["cookie_actual"] = st.session_state["cookie_nueva"]
+    escribir_cookie(st.session_state.pop("cookie_nueva"), seg.DIAS_SESION)
 detalle = estilo.bonito(ficha.puesto) if ficha and ficha.puesto else " y ".join(NOMBRE_ROL.get(r, r) for r in roles)
 
 # Logo del menú: si falta la carpeta assets, la app sigue funcionando sin él
@@ -165,7 +206,9 @@ if logo.exists():
 def pie_menu():
     estilo.tarjeta_usuario(nombre_mostrar, detalle)
     if st.sidebar.button("Cerrar sesión", icon=":material/logout:", type="tertiary"):
+        seg.cerrar_sesion(token=st.session_state.pop("cookie_actual", None) or leer_cookie())
         st.session_state.pop("sesion", None)
+        st.session_state["cookie_borrar"] = True
         st.rerun()
 
 
