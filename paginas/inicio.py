@@ -10,7 +10,7 @@ from reglas_vacaciones import DIAS_PERIODO, MESES_CICLO, inicio_ciclo, jefes_por
 st.markdown(
     """
 <style>
-.i-saludo { font-stretch: 75%; font-weight: 800; font-size: 2.3rem; line-height: 1.1; color: var(--h-tinta); margin: 0; }
+.stApp .i-saludo { font-stretch: 75%; font-weight: 800; font-size: 2.4rem; line-height: 1.1; color: var(--h-tinta); margin: 0; }
 .i-saldo { background: var(--h-azul); color: #FFFFFF; border-radius: 18px; padding: 22px 26px;
   display: grid; grid-template-columns: auto 1fr; gap: 10px 32px; align-items: end; margin-bottom: 6px; }
 .i-cifra { font-stretch: 75%; font-weight: 800; font-size: 4.4rem; line-height: 0.9; }
@@ -29,6 +29,8 @@ st.markdown(
 .i-semana th { font-size: 0.8rem; color: var(--h-suave); font-weight: 600; text-align: center; }
 .i-semana th:first-child { width: 36%; text-align: left; }
 .i-semana th.hoy { color: var(--h-azul); }
+.i-semana, .i-semana thead, .i-semana tbody, .i-semana tr, .i-semana th, .i-semana td { border: 0 !important; box-shadow: none !important; }
+.i-semana tr { background: transparent !important; }
 .i-semana td { height: 32px; border-radius: 8px; background: var(--h-fondo); font-size: 0.75rem; text-align: center; font-weight: 600; }
 .i-semana td:first-child { background: none; text-align: left; font-weight: 500; font-size: 0.86rem;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--h-tinta); }
@@ -64,7 +66,7 @@ if ficha:
 else:  # sin ficha de personal: se usa el nombre registrado en el usuario, si lo hay
     u = db.uno("SELECT nombre FROM usuarios WHERE usuario = :u", {"u": sesion.get("usuario")})
     nombre = (u.nombre or "").split(" ")[0].title() if u and u.nombre else ""
-st.markdown(f'<p class="i-saludo">{saludo}{", " + html.escape(nombre) if nombre else ""}</p>', unsafe_allow_html=True)
+st.markdown(f'<div class="i-saludo">{saludo}{", " + html.escape(nombre) if nombre else ""}</div>', unsafe_allow_html=True)
 st.markdown(f'<div class="h-sub" style="margin-top:4px">{estilo.fecha_larga(hoy)}</div>', unsafe_allow_html=True)
 
 
