@@ -60,6 +60,9 @@ st.markdown(
   margin: 0 4px 0 12px; vertical-align: -1px; }
 .tt-cal-cab { text-align: center; font-weight: 600; color: #4A5D7E; }
 .tt-chips span.fer { background: #FDECEC; color: #B42318; }
+.tt-mes-nombre { font-stretch: 75%; font-weight: 800; font-size: 1.6rem; color: var(--h-tinta); text-align: center; line-height: 1.1; }
+.tt-tabla { background: var(--h-superficie); }
+.tt-tabla, .tt-tabla table, .tt-tabla tr { border-color: var(--h-linea); }
 .tt-chips span { display: inline-block; background: #EDF3FB; color: #0B4F9C;
   border-radius: 999px; padding: 0.3rem 0.8rem; margin: 0 0.4rem 0.4rem 0; font-weight: 500; }
 </style>
@@ -267,13 +270,9 @@ def excel_formato(vista, anio, mes):
 
 
 def banda(titulo, subtitulo, numero, etiqueta):
-    st.markdown(
-        f"""<div class="tt-banda">
-  <div><h2>{html.escape(titulo)}</h2><p>{html.escape(subtitulo)}</p></div>
-  <div class="tt-num"><b>{numero}</b><span>{html.escape(etiqueta)}</span></div>
-</div>""",
-        unsafe_allow_html=True,
-    )
+    """Resumen corto bajo el selector de mes (el mes ya se muestra en el selector)."""
+    st.markdown(f'<div class="h-sub" style="margin-top:0">{html.escape(subtitulo)}: <b>{numero}</b> {html.escape(etiqueta)}.</div>',
+                unsafe_allow_html=True)
 
 
 # ---------- Datos y sesión ----------
@@ -298,15 +297,16 @@ if "tt_mes" not in st.session_state:
 mes_ini = st.session_state["tt_mes"]
 
 st.title("Teletrabajo")
-n1, n2, n3, _ = st.columns([1, 1, 1, 3])
-if n1.button("Mes anterior"):
+n1, n2, n3, n4, _ = st.columns([0.45, 2.2, 0.45, 1.1, 4], vertical_alignment="center")
+if n1.button("‹", key="tt_ant", help="Mes anterior", use_container_width=True):
     st.session_state["tt_mes"] = (mes_ini - timedelta(days=1)).replace(day=1)
     st.rerun()
-if n2.button("Este mes", disabled=mes_ini == hoy.replace(day=1)):
-    st.session_state["tt_mes"] = hoy.replace(day=1)
-    st.rerun()
-if n3.button("Mes siguiente"):
+n2.markdown(f'<div class="tt-mes-nombre">{MESES[mes_ini.month - 1].capitalize()} {mes_ini.year}</div>', unsafe_allow_html=True)
+if n3.button("›", key="tt_sig", help="Mes siguiente", use_container_width=True):
     st.session_state["tt_mes"] = (mes_ini + timedelta(days=32)).replace(day=1)
+    st.rerun()
+if mes_ini != hoy.replace(day=1) and n4.button("Volver a hoy", type="tertiary", key="tt_hoy"):
+    st.session_state["tt_mes"] = hoy.replace(day=1)
     st.rerun()
 
 anio, mes = mes_ini.year, mes_ini.month
@@ -319,7 +319,7 @@ if "tt_aviso" in st.session_state:
 # ---------- Colaborador: solo sus días ----------
 if rol == "colaborador":
     mios = tele_mes[tele_mes["cod"] == mi_cod].sort_values("fecha")
-    banda(nombre_mes, "Tus días de teletrabajo", len(mios), "días este mes")
+    banda(nombre_mes, "Tus días de teletrabajo", len(mios), "día este mes" if len(mios) == 1 else "días este mes")
     if not mi_cod:
         st.warning("Tu usuario todavía no está asociado a tu ficha de personal. Avisa al administrador.")
     elif mios.empty:
@@ -349,7 +349,8 @@ if rol == "jefe":
     mis_areas = [a for a, c in jefes.items() if c == mi_cod] or [yo.iloc[0]["area"]]
     for area in mis_areas:
         del_area = tele_mes[(tele_mes["area"] == area) & (tele_mes["cod"] != mi_cod)]
-        banda(nombre_mes, f"Teletrabajo en {bonito(area)}", del_area["cod"].nunique(), "personas este mes")
+        n_area = del_area["cod"].nunique()
+        banda(nombre_mes, f"Teletrabajo en {bonito(area)}", n_area, "persona este mes" if n_area == 1 else "personas este mes")
         if del_area.empty:
             st.info("Nadie de tu área tiene teletrabajo en este mes.")
         else:
@@ -359,7 +360,9 @@ if rol == "jefe":
 
 # ---------- Admin ----------
 areas = ["Todas las áreas"] + sorted(personal["area"].dropna().unique().tolist())
-banda(nombre_mes, "Teletrabajo del equipo", tele_mes["cod"].nunique(), f"personas, {len(tele_mes)} días en total")
+n_eq = tele_mes["cod"].nunique()
+banda(nombre_mes, "Teletrabajo del equipo", n_eq,
+      f"{'persona' if n_eq == 1 else 'personas'}, {len(tele_mes)} {'día' if len(tele_mes) == 1 else 'días'} en total")
 
 # Teletrabajo que quedó en semanas con vacaciones (de este mes en adelante, todas las áreas)
 vac_todas = db.consultar("SELECT cod, inicio, fin FROM vacaciones_solicitudes WHERE estado <> 'RECHAZADA'")
