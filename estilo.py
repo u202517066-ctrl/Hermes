@@ -63,6 +63,22 @@ button[data-testid="stBaseButton-tertiary"] p { color: var(--h-azul); font-weigh
 [data-baseweb="tab"][aria-selected="true"] p { color: #FFFFFF !important; }
 [data-baseweb="tab-highlight"], [data-baseweb="tab-border"] { display: none !important; }
 
+/* Pestañas como pastillas (versiones nuevas de Streamlit) */
+[data-testid="stTabs"] [role="tablist"] { gap: 6px; border: 0 !important; box-shadow: none !important; }
+[data-testid="stTabs"] [role="tablist"] > :not([data-testid="stTab"]) { display: none !important; }
+[data-testid="stTab"] { border: 1px solid var(--h-linea) !important; border-radius: 999px !important;
+  padding: 6px 16px !important; background: var(--h-superficie) !important; }
+[data-testid="stTab"] p { color: var(--h-tinta) !important; }
+[data-testid="stTab"][aria-selected="true"] { background: var(--h-azul) !important; border-color: var(--h-azul) !important; }
+[data-testid="stTab"][aria-selected="true"] p { color: #FFFFFF !important; }
+
+/* Filtros de un clic (st.pills) */
+[data-testid="stButtonGroup"] button { border-radius: 999px !important; }
+[data-testid="stButtonGroup"] button[aria-checked="true"], [data-testid="stButtonGroup"] button[data-selected="true"] {
+  background: var(--h-celeste) !important; border-color: var(--h-azul) !important; }
+[data-testid="stButtonGroup"] button[aria-checked="true"] p, [data-testid="stButtonGroup"] button[data-selected="true"] p {
+  color: var(--h-azul) !important; font-weight: 700; }
+
 /* Enlaces a otras pantallas como botón */
 [data-testid="stPageLink"] a { border: 1px solid var(--h-linea); border-radius: 10px; padding: 6px 14px;
   background: var(--h-superficie); display: inline-flex; }
