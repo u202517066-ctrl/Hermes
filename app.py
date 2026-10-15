@@ -172,18 +172,18 @@ if rol == "aprobador_facturas":  # solo ve las facturas
                                         default=True)]}).run()
     st.stop()
 
-menu = {"Principal": [st.Page("paginas/inicio.py", title="Inicio", icon=":material/home:", default=True)]}
-if es_jefatura:
-    menu["Principal"].append(st.Page("paginas/dashboard.py", title="Indicadores", icon=":material/insights:"))
-menu["Mi trabajo"] = [
-    st.Page("paginas/vacaciones.py", title="Vacaciones", icon=":material/beach_access:"),
-    st.Page("paginas/teletrabajo.py", title="Teletrabajo", icon=":material/home_work:"),
-]
+# Pantalla que se abre al entrar: Aprobaciones para jefes y administrador; Vacaciones para colaboradores
+menu = {}
 if es_jefatura:
     menu["Mi equipo"] = [
-        st.Page("paginas/aprobaciones.py", title="Aprobaciones", icon=":material/task_alt:"),
+        st.Page("paginas/aprobaciones.py", title="Aprobaciones", icon=":material/task_alt:", default=True),
+        st.Page("paginas/dashboard.py", title="Indicadores", icon=":material/insights:"),
         st.Page("paginas/directorio.py", title="Directorio", icon=":material/groups:"),
     ]
+menu["Mi trabajo"] = [
+    st.Page("paginas/vacaciones.py", title="Vacaciones", icon=":material/beach_access:", default=not es_jefatura),
+    st.Page("paginas/teletrabajo.py", title="Teletrabajo", icon=":material/home_work:"),
+]
 if rol == "admin":
     menu["Finanzas"] = [st.Page("paginas/facturas.py", title="Facturas", icon=":material/receipt_long:")]
     menu["Administración"] = [st.Page("paginas/perfiles.py", title="Perfiles", icon=":material/manage_accounts:")]
