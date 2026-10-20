@@ -190,7 +190,13 @@ st.markdown(
 .v-mes th { font-size: 0.78rem; color: var(--h-suave); font-weight: 600; padding: 2px 0; text-align: center; }
 .v-mes td { height: 42px; text-align: center; border-radius: 9px; font-weight: 600; position: relative;
   vertical-align: middle; color: var(--h-tinta); }
+.v-mes th, .v-mes td { padding: 0 !important; white-space: nowrap; word-break: keep-all; overflow-wrap: normal; }
 .v-mes td.d { background: var(--h-fondo); }
+@media (max-width: 900px) {
+  .v-mes { border-spacing: 3px; }
+  .v-mes td { height: 36px; font-size: 0.85rem; border-radius: 7px; }
+  .v-mes th { font-size: 0.7rem; }
+}
 .v-mes td.finde { color: var(--h-suave); }
 .v-mes td.elegido { background: var(--h-azul); color: #FFFFFF; }
 .v-mes td.fer { color: var(--h-rojo); text-decoration: line-through; background: var(--h-rojo-suave); }
